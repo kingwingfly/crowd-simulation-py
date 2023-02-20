@@ -1,0 +1,58 @@
+{
+    "floor1": {
+        "room1": {
+            "position": [0, 0],
+            "population": 20,
+            "area": 20,
+            "exits": [[1, 0]]
+        },
+        "room2": {
+            "position": [0, 1],
+            "population": 20,
+            "area": 20,
+            "exits": [[1, 0]]
+        },
+        "room3": {
+            "position": [0, 3],
+            "population": 20,
+            "area": 20,
+            "exits": [[1, 0]]
+        },
+        "room4": {
+            "position": [1, 0],
+            "population": 0,
+            "area": 20,
+            "exits": [[0, 1]]
+        },
+        "room5": {
+            "position": [1, 1],
+            "population": 0,
+            "area": 20,
+            "exits": [[-1, 0]]
+        },
+        "room6": {
+            "position": [1, 2],
+            "population": 0,
+            "area": 20,
+            "exits": [[0, -1]]
+        },
+        "room7": {
+            "position": [2, 0],
+            "population": 20,
+            "area": 20,
+            "exits": [[-1, 0]]
+        },
+        "room8": {
+            "position": [2, 1],
+            "population": 0,
+            "area": 20,
+            "exits": []
+        },
+        "room9": {
+            "position": [2, 2],
+            "population": 20,
+            "area": 20,
+            "exits": [[-1, 0]]
+        }
+    }
+}
