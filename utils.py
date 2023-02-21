@@ -3,6 +3,7 @@ from torch.cuda import is_available as is_cuda_available
 import json
 
 device = "cuda" if is_cuda_available() else "cpu"
+lr = 0.01  # Learning rate
 
 
 class Person:
@@ -10,15 +11,28 @@ class Person:
     def __init__(self, room: 'Room') -> None:
         self.route = []
         self.cost = 0
-        self._room = room
+        self._room = room  # The room contains position and exits info
 
     @property
     def room(self):
         return self._room
 
     @room.setter
-    def room(self, target):
+    def room(self, target: 'Room'):
         self._room = target
+
+    @property
+    def destination(self):
+        ...
+        return self.room.floor.building
+
+    @property
+    def exits(self):
+        return self.room.exits
+
+    @property
+    def p(self):
+        return [1 / len(self.exits) for _ in self.exits]
 
     def move(self, target: 'Room'):
         self.route.append(target.position)
@@ -54,7 +68,7 @@ class Room:
         position: tuple,
         population: int,
         area: int | float,
-        exits: list[list[int, int]],
+        exits: list[list[int]],
     ) -> None:
         self._floor = floor
         self._position = position
@@ -63,7 +77,7 @@ class Room:
         self._exits = exits
 
     @property
-    def exits(self) -> list['Exit']:
+    def exits(self):
         return [
             Exit(
                 outset=self,
@@ -104,13 +118,22 @@ class Room:
 
 
 class Floor:
-    def __init__(self, floor_layout: dict[str, dict[str, str | int | float]]) -> None:
+    def __init__(
+        self,
+        building: 'Building',
+        floor_layout: dict[str, dict[str, str | int | float]],
+    ) -> None:
         self._map: dict[int, dict[int, Room]] = {}
         for room_properties in floor_layout.values():
             room = Room(self, **room_properties)
             self._map[room.position[0]] = self._map.get(room.position[0], {}) | {
                 room.position[1]: room
             }
+        self._building = building
+
+    @property
+    def building(self):
+        return self._building
 
     def population_distribution(self):
         self.population_distribution_tensor = tensor(
@@ -140,23 +163,25 @@ class Floor:
         return self.reduce_rates_tensor
 
 
-def floors_gen(
-    floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
-) -> list[Floor]:
-    """Generate a list of Floors according to the json dictionary
-
-    Args:
-        floor_layouts (dict[str, dict[str, dict[str, str  |  int  |  float]]]): A dict read from the json config: floor_layouts.json
-
-    Returns:
-        list[Floor]: A list of Floors, from 1st floor to last floor
-    """
-    return [Floor(floor_layout=floor_layout) for floor_layout in floor_layouts.values()]
-
-
 class Building:
-    def __init__(self, floors) -> None:
-        self._floors = floors
+    def __init__(self, floor_layouts) -> None:
+        self._floors = self.floors_gen(floor_layouts=floor_layouts)
+
+    def floors_gen(
+        self, floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
+    ) -> list[Floor]:
+        """Generate a list of Floors according to the json dictionary
+
+        Args:
+            floor_layouts (dict[str, dict[str, dict[str, str  |  int  |  float]]]): A dict read from the json config: floor_layouts.json
+
+        Returns:
+            list[Floor]: A list of Floors, from 1st floor to last floor
+        """
+        return [
+            Floor(building=self, floor_layout=floor_layout)
+            for floor_layout in floor_layouts.values()
+        ]
 
     def add_floor(self, floor: Floor | list[Floor]):
         """Add floor or floors to a Building Object
@@ -170,8 +195,19 @@ class Building:
         self._floors.append(floor)
 
 
+class Frame:
+    def __init__(self, building: Building) -> None:
+        self.building = building
+
+    def next_frame(self) -> 'Frame':
+        """Predict the next Frame for the later animtion and iteration"""
+        ...
+
+    def _forward(self):
+        ...
+
+
 if __name__ == "__main__":
     with open('./floor_layouts.json', 'r', encoding='utf-8') as f:
         floor_layouts = json.load(f)
-    floors = floors_gen(floor_layouts)
-    building = Building(floors=floors)
+    building = Building(floor_layouts=floor_layouts)
