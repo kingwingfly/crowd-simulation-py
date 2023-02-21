@@ -15,6 +15,7 @@ class Person:
 
     @property
     def room(self):
+        """The room object where the person in"""
         return self._room
 
     @room.setter
@@ -23,18 +24,41 @@ class Person:
 
     @property
     def destination(self):
-        ...
-        return self.room.floor.building
+        """The destination Room the person wanna go
+
+        Returns:
+            Room object
+        """
+        return self.room.floor.building.get_room((0, 0, 0))
 
     @property
     def exits(self):
+        """The exits the room person in has
+
+        Returns:
+            [Room]
+        """
         return self.room.exits
 
     @property
     def p(self):
         return [1 / len(self.exits) for _ in self.exits]
 
-    def move(self, target: 'Room'):
+    @property
+    def position(self):
+        """The coordinate of the room the person in
+
+        Returns:
+            (int, int, int)
+        """
+        return self.room.position
+
+    def move(self, target: 'Room') -> None:
+        """Move the person to a certain room
+
+        Args:
+            target (Room): The target room
+        """
         self.route.append(target.position)
         self.room = target
         self.cost += 1
@@ -47,9 +71,9 @@ class Exit:
         """init an exit
 
         Args:
-            outset (_type_): The room where the exit belongs to
-            target (_type_): The room where the exit goes to
-            pass_factor (_type_): A factor for the pass rate of the exit
+            outset (Room): The room where the exit belongs to
+            target (Room): The room where the exit goes to
+            pass_factor (int | float): A factor for the pass rate of the exit
         """
         self._pass_factor = pass_factor
         self._outset = outset
@@ -58,6 +82,11 @@ class Exit:
 
     @property
     def pass_factor(self):
+        """The factor that reflect the export capacity
+
+        Returns:
+            int | float: The factor that reflect the export capacity
+        """
         return self._pass_factor * 0.7 if self.cross else self._pass_factor
 
 
@@ -65,7 +94,7 @@ class Room:
     def __init__(
         self,
         floor: 'Floor',
-        position: tuple,
+        position: tuple[int, int],
         population: int,
         area: int | float,
         exits: list[list[int]],
@@ -74,10 +103,15 @@ class Room:
         self._position = position
         self._persons = [Person(room=self) for _ in range(population)]
         self._area = area
-        self._exits = exits
+        self._exits = exits  # The exits position
 
     @property
     def exits(self):
+        """The room's Exit objects
+
+        Returns:
+            [Exit]: The room's Exit objects
+        """
         return [
             Exit(
                 outset=self,
@@ -91,6 +125,11 @@ class Room:
 
     @property
     def reduce_rate(self) -> int | float:
+        """The reduce rate of the room
+
+        Returns:
+            int | float: The reduce rate of the room
+        """
         return sum(
             [
                 1 / (self.population / self.area) * exit.pass_factor
@@ -102,6 +141,11 @@ class Room:
 
     @property
     def population(self):
+        """The number of the person in the room
+
+        Returns:
+            int
+        """
         return len(self._persons)
 
     @property
@@ -110,19 +154,31 @@ class Room:
 
     @property
     def floor(self):
+        """The Floor object the room on
+
+        Returns:
+            Floor
+        """
         return self._floor
 
     @property
     def position(self):
-        return self._position
+        """The position of the room: (floor_num, row, column)
+
+        Returns:
+            (int, int, int): (floor_num, row, column)
+        """
+        return (self.floor.floor_num, self._position[0], self._position[1])
 
 
 class Floor:
     def __init__(
         self,
         building: 'Building',
+        floor_num: int,
         floor_layout: dict[str, dict[str, str | int | float]],
     ) -> None:
+        self._floor_num = floor_num
         self._map: dict[int, dict[int, Room]] = {}
         for room_properties in floor_layout.values():
             room = Room(self, **room_properties)
@@ -133,9 +189,28 @@ class Floor:
 
     @property
     def building(self):
+        """The Building object the floor in
+
+        Returns:
+            Building
+        """
         return self._building
 
+    @property
+    def floor_num(self):
+        """The floor_num of the floor
+
+        Returns:
+            int
+        """
+        return self._floor_num
+
     def population_distribution(self):
+        """The tensor of the population distribution
+
+        Returns:
+            Tensor
+        """
         self.population_distribution_tensor = tensor(
             [
                 [room.population for _, room in sorted(row.items(), key=lambda x: x[0])]
@@ -149,6 +224,11 @@ class Floor:
         return self.population_distribution_tensor
 
     def reduce_rates(self):
+        """The tensor of the reduce rate distribution
+
+        Returns:
+            Tensor
+        """
         self.reduce_rates_tensor = tensor(
             [
                 [
@@ -162,12 +242,32 @@ class Floor:
         print(f"The reduce rates are\n{self.reduce_rates_tensor}\n")
         return self.reduce_rates_tensor
 
+    def get_room(self, position: tuple[int, int]) -> Room:
+        """Get the Room object by position
+
+        Args:
+            position (tuple[int, int]): (row, col)
+
+        Returns:
+            Room
+        """
+        return self._map[position[0]][position[1]]
+
 
 class Building:
     def __init__(self, floor_layouts) -> None:
-        self._floors = self.floors_gen(floor_layouts=floor_layouts)
+        self._floors = self._floors_gen(floor_layouts=floor_layouts)
 
-    def floors_gen(
+    @property
+    def floors(self):
+        """Floor objects of the building
+
+        Returns:
+            [Floor]
+        """
+        return self._floors
+
+    def _floors_gen(
         self, floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
     ) -> list[Floor]:
         """Generate a list of Floors according to the json dictionary
@@ -179,8 +279,8 @@ class Building:
             list[Floor]: A list of Floors, from 1st floor to last floor
         """
         return [
-            Floor(building=self, floor_layout=floor_layout)
-            for floor_layout in floor_layouts.values()
+            Floor(building=self, floor_num=floor_num, floor_layout=floor_layout)
+            for floor_num, floor_layout in enumerate(floor_layouts.values())
         ]
 
     def add_floor(self, floor: Floor | list[Floor]):
@@ -193,6 +293,17 @@ class Building:
             self._floors.extend(floor)
             return
         self._floors.append(floor)
+
+    def get_room(self, position: tuple[int, int, int]) -> Room:
+        """Get the Room object of the room
+
+        Args:
+            position (tuple[int, int, int]): (floor_num, row, col)
+
+        Returns:
+            Room
+        """
+        return self.floors[position[0]].get_room((tuple[1], tuple[2]))
 
 
 class Frame:
@@ -210,4 +321,6 @@ class Frame:
 if __name__ == "__main__":
     with open('./floor_layouts.json', 'r', encoding='utf-8') as f:
         floor_layouts = json.load(f)
+    # from pprint import pprint
+    # pprint(floor_layouts)
     building = Building(floor_layouts=floor_layouts)
