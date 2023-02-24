@@ -1,3 +1,4 @@
+from collections import namedtuple
 from torch import tensor
 from torch.cuda import is_available as is_cuda_available
 import json
@@ -6,6 +7,8 @@ import logging
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
+Point = namedtuple('Point', ['row', 'col'])
+Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
 
 class Person:
@@ -31,7 +34,7 @@ class Person:
         Returns:
             Room object
         """
-        return self.room.floor.building.get_room((0, 0, 0))
+        return self.room.floor.building.get_room(Position(0, 0, 0))
 
     @property
     def exits(self):
@@ -47,11 +50,11 @@ class Person:
         return tensor([1 / len(self.exits) for _ in self.exits], requires_grad=True)
 
     @property
-    def position(self):
+    def position(self) -> Position:
         """The coordinate of the room the person in
 
         Returns:
-            (int, int, int)
+            Position(floor_num: int, row: int, col: int)
         """
         return self.room.position
 
@@ -99,13 +102,14 @@ class Room:
         position: tuple[int, int],
         population: int,
         area: int | float,
-        exits: list[list[int]],
+        exits: list[tuple[int, int]],
     ) -> None:
         self._floor = floor
-        self._position = position
+        self._position = Point(row=position[0], col=position[1])
         self._persons = [Person(room=self) for _ in range(population)]
         self._area = area
-        self._exits = exits  # The exits position
+        self._exits_positions = exits  # The exits position
+        self._exits = None
 
     @property
     def exits(self):
@@ -114,16 +118,18 @@ class Room:
         Returns:
             [Exit]: The room's Exit objects
         """
-        return [
-            Exit(
-                outset=self,
-                target=self._floor._map[self.position[0] + row][
-                    self.position[0] + col
-                ],  # Room
-                pass_factor=1,
-            )
-            for row, col in self._exits
-        ]
+        if not self._exits:
+            self._exits = [
+                Exit(
+                    outset=self,
+                    target=self.floor.get_room(
+                        (self.position.row + row, self.position.col + col)
+                    ),  # Room
+                    pass_factor=1,
+                )
+                for row, col in self._exits
+            ]
+        return self._exits
 
     @property
     def reduce_rate(self) -> int | float:
@@ -164,13 +170,15 @@ class Room:
         return self._floor
 
     @property
-    def position(self):
-        """The position of the room: (floor_num, row, column)
+    def position(self) -> Position:
+        """The position of the room: (floor_num, row, col)
 
         Returns:
-            (int, int, int): (floor_num, row, column)
+            Psition(floor_num: int, row: int, col: int)
         """
-        return (self.floor.floor_num, self._position[0], self._position[1])
+        return Position(
+            floor_num=self.floor.floor_num, row=self._position[0], col=self._position[1]
+        )
 
 
 class Floor:
@@ -182,12 +190,19 @@ class Floor:
     ) -> None:
         self._floor_num = floor_num
         self._map: dict[int, dict[int, Room]] = {}
+        logging.info(f"The floor layout of F{self.floor_num} is\n{floor_layout}\n")
         for room_properties in floor_layout.values():
             room = Room(self, **room_properties)
-            self._map[room.position[0]] = self._map.get(room.position[0], {}) | {
-                room.position[1]: room
+            self._map[room.position.row] = self._map.get(room.position.row, {}) | {
+                room.position.col: room
             }
+        logging.info(f"The population distribution array is\n{self._map}\n")
         self._building = building
+        self._population_distribution_tensor = None
+        self._reduce_rates_tensor = None
+
+    def __str__(self) -> str:
+        return str(self.population_distribution)
 
     @property
     def building(self):
@@ -207,60 +222,70 @@ class Floor:
         """
         return self._floor_num
 
+    @property
     def population_distribution(self):
         """The tensor of the population distribution
 
         Returns:
             Tensor
         """
-        self.population_distribution_tensor = tensor(
-            [
-                [room.population for _, room in sorted(row.items(), key=lambda x: x[0])]
-                for _, row in sorted(self._map.items(), key=lambda x: x[0])
-            ],
-            device=device,
+        if not self._population_distribution_tensor:
+            self._population_distribution_tensor = tensor(
+                [
+                    [
+                        room.population
+                        for _, room in sorted(row.items(), key=lambda x: x[0])
+                    ]
+                    for _, row in sorted(self._map.items(), key=lambda x: x[0])
+                ],
+                device=device,
+            )
+        logging.info(
+            f"The population distribution is\n{self._population_distribution_tensor}\n"
         )
-        print(
-            f"The population distribution is\n{self.population_distribution_tensor}\n"
-        )
-        return self.population_distribution_tensor
+        return self._population_distribution_tensor
 
+    @property
     def reduce_rates(self):
         """The tensor of the reduce rate distribution
 
         Returns:
             Tensor
         """
-        self.reduce_rates_tensor = tensor(
-            [
+        if not self.reduce_rates:
+            self._reduce_rates_tensor = tensor(
                 [
-                    room.reduce_rate
-                    for _, room in sorted(row.items(), key=lambda x: x[0])
-                ]
-                for _, row in sorted(self._map.items(), key=lambda x: x[0])
-            ],
-            device=device,
-        )
-        print(f"The reduce rates are\n{self.reduce_rates_tensor}\n")
-        return self.reduce_rates_tensor
+                    [
+                        room.reduce_rate
+                        for _, room in sorted(row.items(), key=lambda x: x[0])
+                    ]
+                    for _, row in sorted(self._map.items(), key=lambda x: x[0])
+                ],
+                device=device,
+            )
+        logging.info(f"The reduce rates are\n{self._reduce_rates_tensor}\n")
+        return self._reduce_rates_tensor
 
-    def get_room(self, position: tuple[int, int]) -> Room:
+    def get_room(self, position: Point) -> Room:
         """Get the Room object by position
 
         Args:
-            position (tuple[int, int]): (row, col)
+            position (Point[x: int, y: int]): (row, col)
 
         Returns:
             Room
         """
         if len(position) != 2:
             logging.error(f'The position need 2 figures but got {len(position)}')
-        return self._map[position[0]][position[1]]
+        return self._map[position.row][position.col]
 
 
 class Building:
     def __init__(self, floor_layouts) -> None:
         self._floors = self._floors_gen(floor_layouts=floor_layouts)
+
+    def __str__(self) -> str:
+        return '\n'.join([f"{floor}" for floor in self.floors])
 
     @property
     def floors(self):
@@ -298,7 +323,7 @@ class Building:
             return
         self._floors.append(floor)
 
-    def get_room(self, position: tuple[int, int, int]) -> Room:
+    def get_room(self, position: Position) -> Room:
         """Get the Room object at the position passed in
 
         Args:
@@ -309,7 +334,7 @@ class Building:
         """
         if len(position) != 3:
             logging.error(f'The position need 3 figures but got {len(position)}')
-        return self.floors[position[0]].get_room((tuple[1], tuple[2]))
+        return self.floors[position.floor_num].get_room((position.row, position.col))
 
 
 class Frame:
@@ -330,5 +355,6 @@ if __name__ == "__main__":
     )
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
-    logging.debug(floor_layouts)
+    logging.debug(f"{floor_layouts}\n")
     building = Building(floor_layouts=floor_layouts)
+    print(building)
