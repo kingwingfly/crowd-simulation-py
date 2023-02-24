@@ -1,6 +1,8 @@
-from torch import tensor, zeros
+from torch import tensor
 from torch.cuda import is_available as is_cuda_available
 import json
+import logging
+
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
@@ -8,7 +10,7 @@ lr = 0.01  # Learning rate
 
 class Person:
     # todo 结伴
-    def __init__(self, room: 'Room') -> None:
+    def __init__(self, room: "Room") -> None:
         self.route = []
         self.cost = 0
         self._room = room  # The room contains position and exits info
@@ -19,7 +21,7 @@ class Person:
         return self._room
 
     @room.setter
-    def room(self, target: 'Room'):
+    def room(self, target: "Room"):
         self._room = target
 
     @property
@@ -42,7 +44,7 @@ class Person:
 
     @property
     def p(self):
-        return [1 / len(self.exits) for _ in self.exits]
+        return tensor([1 / len(self.exits) for _ in self.exits], requires_grad=True)
 
     @property
     def position(self):
@@ -53,7 +55,7 @@ class Person:
         """
         return self.room.position
 
-    def move(self, target: 'Room') -> None:
+    def move(self, target: "Room") -> None:
         """Move the person to a certain room
 
         Args:
@@ -66,7 +68,7 @@ class Person:
 
 class Exit:
     def __init__(
-        self, outset: 'Room', target: 'Room', pass_factor: int | float
+        self, outset: "Room", target: "Room", pass_factor: int | float
     ) -> None:
         """init an exit
 
@@ -82,7 +84,7 @@ class Exit:
 
     @property
     def pass_factor(self):
-        """The factor that reflect the export capacity
+        """The factor that reflect the export capacity, if people cross, the bigger factor the better export capacity, the pass_factor will be smaller
 
         Returns:
             int | float: The factor that reflect the export capacity
@@ -93,7 +95,7 @@ class Exit:
 class Room:
     def __init__(
         self,
-        floor: 'Floor',
+        floor: "Floor",
         position: tuple[int, int],
         population: int,
         area: int | float,
@@ -134,7 +136,7 @@ class Room:
             [
                 1 / (self.population / self.area) * exit.pass_factor
                 if self.population
-                else float('inf')
+                else float("inf")
                 for exit in self.exits
             ]
         )  # The population reduce rate is related to the density of people, the pass_factor and number of exits, the unit is people per frame
@@ -174,7 +176,7 @@ class Room:
 class Floor:
     def __init__(
         self,
-        building: 'Building',
+        building: "Building",
         floor_num: int,
         floor_layout: dict[str, dict[str, str | int | float]],
     ) -> None:
@@ -251,6 +253,8 @@ class Floor:
         Returns:
             Room
         """
+        if len(position) != 2:
+            logging.error(f'The position need 2 figures but got {len(position)}')
         return self._map[position[0]][position[1]]
 
 
@@ -260,7 +264,7 @@ class Building:
 
     @property
     def floors(self):
-        """Floor objects of the building
+        """Get Floor objects of the building
 
         Returns:
             [Floor]
@@ -295,7 +299,7 @@ class Building:
         self._floors.append(floor)
 
     def get_room(self, position: tuple[int, int, int]) -> Room:
-        """Get the Room object of the room
+        """Get the Room object at the position passed in
 
         Args:
             position (tuple[int, int, int]): (floor_num, row, col)
@@ -303,6 +307,8 @@ class Building:
         Returns:
             Room
         """
+        if len(position) != 3:
+            logging.error(f'The position need 3 figures but got {len(position)}')
         return self.floors[position[0]].get_room((tuple[1], tuple[2]))
 
 
@@ -310,7 +316,7 @@ class Frame:
     def __init__(self, building: Building) -> None:
         self.building = building
 
-    def next_frame(self) -> 'Frame':
+    def next_frame(self) -> "Frame":
         """Predict the next Frame for the later animtion and iteration"""
         ...
 
@@ -319,8 +325,10 @@ class Frame:
 
 
 if __name__ == "__main__":
-    with open('./floor_layouts.json', 'r', encoding='utf-8') as f:
+    logging.basicConfig(
+        filename='utils.log', filemode='w', encoding='utf-8', level=logging.DEBUG
+    )
+    with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
-    # from pprint import pprint
-    # pprint(floor_layouts)
+    logging.debug(floor_layouts)
     building = Building(floor_layouts=floor_layouts)
