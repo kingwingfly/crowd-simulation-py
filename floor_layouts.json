@@ -102,7 +102,7 @@
             "position": [2, 1],
             "population": 0,
             "area": 20,
-            "exits": [[0, 0]]
+            "exits": []
         },
         "room9": {
             "position": [2, 2],

@@ -60,7 +60,7 @@ class Person:
 
     @property
     def p(self):
-        # todo the tensor should be like this (floor_num, row, col, p)
+        # todo 习惯概率 + 临场判断
         if not self._p:
             self._p = tensor(
                 [1 / len(self.exits) for _ in self.exits], requires_grad=True
@@ -128,6 +128,9 @@ class Exit:
         self._target = target
         self.cross = False  # personnel cross-flow influence the pass_factor
 
+    def __str__(self):
+        return f"Exit: From {self._outset.position} to {self.target.position}"
+
     @property
     def pass_factor(self):
         """The factor that reflect the export capacity, if people cross, the bigger factor the better export capacity, the pass_factor will be smaller
@@ -156,10 +159,10 @@ class Room:
         self._persons = [Person(room=self) for _ in range(population)]
         self._area = area
         self._exits_positions = exits  # The exits position
-        self._exits = None
+        self._exits = []
 
     def __str__(self):
-        return f"Position: {self.position}\nPopulation: {self.population}\nExits number: {len(self.exits)}\nReduce rate: {self.reduce_rate}"
+        return f"Room: Position: {self.position}\nPopulation: {self.population}\nExits number: {len(self.exits)}\nReduce rate: {self.reduce_rate}"
 
     def __iter__(self):
         for person in self._persons:
@@ -173,29 +176,35 @@ class Room:
             [Exit]: The room's Exit objects
         """
         if not self._exits:
-            self._exits = [
-                Exit(
-                    outset=self,
-                    target=self.floor.get_room(
-                        Point(
-                            self.position.row + delta_row, self.position.col + delta_col
-                        )
-                    ),  # Room
-                    pass_factor=1,
-                )
-                if self._exits_positions  # if there's no exits given, the target is the room right below
-                else Exit(
-                    outset=self,
-                    target=self.building.get_room(
-                        Position(
-                            max(self.position.floor_num - 1, 0),
-                            self.position.row,
-                            self.position.col,
-                        )
-                    ),
-                )
-                for delta_row, delta_col in self._exits_positions
-            ]
+            self._exits = (
+                [
+                    Exit(
+                        outset=self,
+                        target=self.floor.get_room(
+                            Point(
+                                self.position.row + delta_row,
+                                self.position.col + delta_col,
+                            )
+                        ),  # Room
+                        pass_factor=1,
+                    )
+                    for delta_row, delta_col in self._exits_positions
+                ]
+                if self._exits_positions
+                else [
+                    Exit(
+                        outset=self,
+                        target=self.building.get_room(
+                            Position(
+                                floor_num=max(self.position.floor_num - 1, 0),
+                                row=self.position.row,
+                                col=self.position.col,
+                            )
+                        ),
+                        pass_factor=1,
+                    )
+                ]
+            )
         return self._exits
 
     @property
@@ -408,7 +417,7 @@ class Building:
         """Get the Room object at the position passed in
 
         Args:
-            position (tuple[int, int, int]): (floor_num, row, col)
+            position (Position[int, int, int]): (floor_num, row, col)
 
         Returns:
             Room
@@ -463,3 +472,4 @@ if __name__ == "__main__":
     for i in range(300):
         simulator.next_frame()
         print(building)
+        print(building.get_room(Position(1, 2, 1)).exits[0])
