@@ -8,6 +8,7 @@ from random import random
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
+epoch_num = 10000  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
@@ -352,6 +353,15 @@ class Floor:
         logging.info(f"The reduce rates are\n{self._reduce_rates_tensor}\n")
         return self._reduce_rates_tensor
 
+    @property
+    def total_popularity(self) -> int:
+        """The total people number of this floor
+
+        Returns:
+            int: Total people number of the floor
+        """
+        return sum([room.population for room in self])
+
     def get_room(self, position: Point) -> Room:
         """Get the Room object by position
 
@@ -385,6 +395,15 @@ class Building:
             list[Floor]
         """
         return self._floors
+
+    @property
+    def total_popularity(self) -> int:
+        """The total people number of this building
+
+        Returns:
+            int: Total people number of the building
+        """
+        return sum([floor.total_popularity for floor in self])
 
     def _floors_gen(
         self, floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
@@ -435,8 +454,8 @@ class Simulator:
         self.queue = Queue()
         self.frame_num = 0
 
-    def person_move(self):
-        """Move all persons in building according to person.p"""
+    def _person_move(self):
+        """Move all persons in building according to person.p and reduce rate"""
         for floor in self.building.floors:
             for room in floor:
                 for person in room:
@@ -449,14 +468,20 @@ class Simulator:
             person, target = self.queue.get()
             person.move(target)
 
-    def next_frame(self):
+    def _next_frame(self):
         """Predict the next Frame for the later animtion and iteration"""
         logging.debug(f'The frame_num is {self.frame_num}')
-        self.person_move()
+        self._person_move()
         self.frame_num += 1
 
-    def _forward(self):
-        ...
+    def forward(self):
+        while (
+            self.building.get_room(Position(floor_num=0, row=2, col=1)).population
+            != self.building.total_popularity
+        ):
+            self._next_frame()
+        logging.info(f'Simulation ended within {self.frame_num} frames\n')
+        return self.frame_num
 
 
 if __name__ == "__main__":
@@ -467,9 +492,11 @@ if __name__ == "__main__":
         floor_layouts = json.load(f)
     logging.debug(f"{floor_layouts}\n")
     building = Building(floor_layouts=floor_layouts)
-    print(building)
     simulator = Simulator(building=building)
-    for i in range(300):
-        simulator.next_frame()
-        print(building)
-        print(building.get_room(Position(1, 2, 1)).exits[0])
+    result = float("inf")
+    for _ in range(epoch_num):
+        temp = simulator.forward()
+        result = min(result, temp)
+    print(result)
+
+    print("Finish!")
