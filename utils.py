@@ -3,7 +3,8 @@ from torch import tensor
 from torch.cuda import is_available as is_cuda_available
 import json
 import logging
-
+from queue import Queue  # for storaging the move action of persons
+from random import random
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
@@ -14,9 +15,19 @@ Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 class Person:
     # todo 结伴
     def __init__(self, room: "Room") -> None:
-        self.route = []
+        self._route = []
         self.cost = 0
         self._room = room  # The room contains position and exits info
+        self._p = None
+
+    def __str__(self) -> str:
+        return str(self.p)
+
+    @property
+    def route(self):
+        if not self._route:
+            self._route = [self.position]
+        return self._route
 
     @property
     def room(self):
@@ -25,7 +36,9 @@ class Person:
 
     @room.setter
     def room(self, target: "Room"):
+        self._room._persons.remove(self)
         self._room = target
+        target._persons.append(self)
 
     @property
     def destination(self):
@@ -38,25 +51,55 @@ class Person:
 
     @property
     def exits(self):
-        """The exits the room person in has
+        """The exits the room containing the person has
 
         Returns:
-            [Room]
+            list[Room]
         """
         return self.room.exits
 
     @property
     def p(self):
-        return tensor([1 / len(self.exits) for _ in self.exits], requires_grad=True)
+        # todo the tensor should be like this (floor_num, row, col, p)
+        if not self._p:
+            self._p = tensor(
+                [1 / len(self.exits) for _ in self.exits], requires_grad=True
+            )
+        return self._p
 
     @property
     def position(self) -> Position:
-        """The coordinate of the room the person in
+        """The coordinate of the room containing the person
 
         Returns:
             Position(floor_num: int, row: int, col: int)
         """
         return self.room.position
+
+    def whether_move(self) -> bool:
+        """To judge if the person could move to next room
+
+        Returns:
+            bool: True for move to next room, False for keep the old room
+        """
+        return (
+            True if random() < self.room.reduce_rate / self.room.population else False
+        )
+
+    def where_move(self) -> 'Room':
+        """To determine which room the person will go to next frame
+
+        Returns:
+            Room: The room the person will go to the next frame
+        """
+        r = random()
+        for i in range(len(self.exits)):
+            p = self.p.tolist()[i]
+            if r - p <= 0 and p != 0:
+                target = self.exits[i].target
+                logging.debug(f'Person move from {self.position} to {target.position}')
+                return target
+            r -= p
 
     def move(self, target: "Room") -> None:
         """Move the person to a certain room
@@ -76,8 +119,8 @@ class Exit:
         """init an exit
 
         Args:
-            outset (Room): The room where the exit belongs to
-            target (Room): The room where the exit goes to
+            outset (Room): The room which the exit belongs to
+            target (Room): The room which the exit goes to
             pass_factor (int | float): A factor for the pass rate of the exit
         """
         self._pass_factor = pass_factor
@@ -93,6 +136,10 @@ class Exit:
             int | float: The factor that reflect the export capacity
         """
         return self._pass_factor * 0.7 if self.cross else self._pass_factor
+
+    @property
+    def target(self):
+        return self._target
 
 
 class Room:
@@ -111,6 +158,13 @@ class Room:
         self._exits_positions = exits  # The exits position
         self._exits = None
 
+    def __str__(self):
+        return f"Position: {self.position}\nPopulation: {self.population}\nExits number: {len(self.exits)}\nReduce rate: {self.reduce_rate}"
+
+    def __iter__(self):
+        for person in self._persons:
+            yield person
+
     @property
     def exits(self):
         """The room's Exit objects
@@ -123,11 +177,24 @@ class Room:
                 Exit(
                     outset=self,
                     target=self.floor.get_room(
-                        (self.position.row + row, self.position.col + col)
+                        Point(
+                            self.position.row + delta_row, self.position.col + delta_col
+                        )
                     ),  # Room
                     pass_factor=1,
                 )
-                for row, col in self._exits
+                if self._exits_positions  # if there's no exits given, the target is the room right below
+                else Exit(
+                    outset=self,
+                    target=self.building.get_room(
+                        Position(
+                            max(self.position.floor_num - 1, 0),
+                            self.position.row,
+                            self.position.col,
+                        )
+                    ),
+                )
+                for delta_row, delta_col in self._exits_positions
             ]
         return self._exits
 
@@ -170,6 +237,15 @@ class Room:
         return self._floor
 
     @property
+    def building(self):
+        """The Building object the room in
+
+        Returns:
+            Building
+        """
+        return self.floor.building
+
+    @property
     def position(self) -> Position:
         """The position of the room: (floor_num, row, col)
 
@@ -177,7 +253,9 @@ class Room:
             Psition(floor_num: int, row: int, col: int)
         """
         return Position(
-            floor_num=self.floor.floor_num, row=self._position[0], col=self._position[1]
+            floor_num=self.floor.floor_num,
+            row=self._position.row,
+            col=self._position.col,
         )
 
 
@@ -192,17 +270,21 @@ class Floor:
         self._map: dict[int, dict[int, Room]] = {}
         logging.info(f"The floor layout of F{self.floor_num} is\n{floor_layout}\n")
         for room_properties in floor_layout.values():
-            room = Room(self, **room_properties)
+            room = Room(floor=self, **room_properties)
             self._map[room.position.row] = self._map.get(room.position.row, {}) | {
                 room.position.col: room
             }
-        logging.info(f"The population distribution array is\n{self._map}\n")
         self._building = building
         self._population_distribution_tensor = None
         self._reduce_rates_tensor = None
 
     def __str__(self) -> str:
         return str(self.population_distribution)
+
+    def __iter__(self):
+        for row in self._map.values():
+            for room in row.values():
+                yield room
 
     @property
     def building(self):
@@ -229,17 +311,13 @@ class Floor:
         Returns:
             Tensor
         """
-        if not self._population_distribution_tensor:
-            self._population_distribution_tensor = tensor(
-                [
-                    [
-                        room.population
-                        for _, room in sorted(row.items(), key=lambda x: x[0])
-                    ]
-                    for _, row in sorted(self._map.items(), key=lambda x: x[0])
-                ],
-                device=device,
-            )
+        self._population_distribution_tensor = tensor(
+            [
+                [room.population for _, room in sorted(row.items(), key=lambda x: x[0])]
+                for _, row in sorted(self._map.items(), key=lambda x: x[0])
+            ],
+            device=device,
+        )
         logging.info(
             f"The population distribution is\n{self._population_distribution_tensor}\n"
         )
@@ -252,17 +330,16 @@ class Floor:
         Returns:
             Tensor
         """
-        if not self.reduce_rates:
-            self._reduce_rates_tensor = tensor(
+        self._reduce_rates_tensor = tensor(
+            [
                 [
-                    [
-                        room.reduce_rate
-                        for _, room in sorted(row.items(), key=lambda x: x[0])
-                    ]
-                    for _, row in sorted(self._map.items(), key=lambda x: x[0])
-                ],
-                device=device,
-            )
+                    room.reduce_rate
+                    for _, room in sorted(row.items(), key=lambda x: x[0])
+                ]
+                for _, row in sorted(self._map.items(), key=lambda x: x[0])
+            ],
+            device=device,
+        )
         logging.info(f"The reduce rates are\n{self._reduce_rates_tensor}\n")
         return self._reduce_rates_tensor
 
@@ -270,7 +347,7 @@ class Floor:
         """Get the Room object by position
 
         Args:
-            position (Point[x: int, y: int]): (row, col)
+            position (Point[row: int, col: int]): (row, col)
 
         Returns:
             Room
@@ -285,14 +362,18 @@ class Building:
         self._floors = self._floors_gen(floor_layouts=floor_layouts)
 
     def __str__(self) -> str:
-        return '\n'.join([f"{floor}" for floor in self.floors])
+        return '\n'.join([f"{floor}" for floor in self.floors]) + '\n'
+
+    def __iter__(self):
+        for floor in self.floors:
+            yield floor
 
     @property
     def floors(self):
         """Get Floor objects of the building
 
         Returns:
-            [Floor]
+            list[Floor]
         """
         return self._floors
 
@@ -334,16 +415,36 @@ class Building:
         """
         if len(position) != 3:
             logging.error(f'The position need 3 figures but got {len(position)}')
-        return self.floors[position.floor_num].get_room((position.row, position.col))
+        return self.floors[position.floor_num].get_room(
+            Point(position.row, position.col)
+        )
 
 
-class Frame:
+class Simulator:
     def __init__(self, building: Building) -> None:
         self.building = building
+        self.queue = Queue()
+        self.frame_num = 0
 
-    def next_frame(self) -> "Frame":
+    def person_move(self):
+        """Move all persons in building according to person.p"""
+        for floor in self.building.floors:
+            for room in floor:
+                for person in room:
+                    if not person.whether_move():
+                        continue
+                    self.queue.put((person, person.where_move()))
+        while not self.queue.empty():
+            person: Person
+            target: Room
+            person, target = self.queue.get()
+            person.move(target)
+
+    def next_frame(self):
         """Predict the next Frame for the later animtion and iteration"""
-        ...
+        logging.debug(f'The frame_num is {self.frame_num}')
+        self.person_move()
+        self.frame_num += 1
 
     def _forward(self):
         ...
@@ -358,3 +459,7 @@ if __name__ == "__main__":
     logging.debug(f"{floor_layouts}\n")
     building = Building(floor_layouts=floor_layouts)
     print(building)
+    simulator = Simulator(building=building)
+    for i in range(300):
+        simulator.next_frame()
+        print(building)
