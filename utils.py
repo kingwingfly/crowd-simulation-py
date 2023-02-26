@@ -8,7 +8,7 @@ from random import random
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
-epoch_num = 10000  # epoch number
+epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
@@ -278,7 +278,7 @@ class Floor:
     ) -> None:
         self._floor_num = floor_num
         self._map: dict[int, dict[int, Room]] = {}
-        logging.info(f"The floor layout of F{self.floor_num} is\n{floor_layout}\n")
+        logging.debug(f"The floor layout of F{self.floor_num} is\n{floor_layout}\n")
         for room_properties in floor_layout.values():
             room = Room(floor=self, **room_properties)
             self._map[room.position.row] = self._map.get(room.position.row, {}) | {
@@ -328,7 +328,7 @@ class Floor:
             ],
             device=device,
         )
-        logging.info(
+        logging.debug(
             f"The population distribution is\n{self._population_distribution_tensor}\n"
         )
         return self._population_distribution_tensor
@@ -350,7 +350,7 @@ class Floor:
             ],
             device=device,
         )
-        logging.info(f"The reduce rates are\n{self._reduce_rates_tensor}\n")
+        logging.debug(f"The reduce rates are\n{self._reduce_rates_tensor}\n")
         return self._reduce_rates_tensor
 
     @property
@@ -475,6 +475,7 @@ class Simulator:
         self.frame_num += 1
 
     def forward(self):
+        self.frame_num = 0
         while (
             self.building.get_room(Position(floor_num=0, row=2, col=1)).population
             != self.building.total_popularity
@@ -486,15 +487,15 @@ class Simulator:
 
 if __name__ == "__main__":
     logging.basicConfig(
-        filename='utils.log', filemode='w', encoding='utf-8', level=logging.DEBUG
+        filename='utils.log', filemode='w', encoding='utf-8', level=logging.INFO
     )
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
     logging.debug(f"{floor_layouts}\n")
-    building = Building(floor_layouts=floor_layouts)
-    simulator = Simulator(building=building)
     result = float("inf")
     for _ in range(epoch_num):
+        building = Building(floor_layouts=floor_layouts)
+        simulator = Simulator(building=building)
         temp = simulator.forward()
         result = min(result, temp)
     print(result)
