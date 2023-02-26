@@ -1,4 +1,5 @@
 from collections import namedtuple
+from itertools import chain
 from torch import tensor
 from torch.cuda import is_available as is_cuda_available
 import json
@@ -8,7 +9,7 @@ from random import random
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
-epoch_num = 100  # epoch number
+epoch_num = 10  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
@@ -16,9 +17,10 @@ Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 class Person:
     # todo 结伴
     def __init__(self, room: "Room") -> None:
-        self._route = []
-        self.cost = 0
+        self._cost = 0
         self._room = room  # The room contains position and exits info
+        self._original_room = room
+        self._route = [self.position]
         self._p = None
 
     def __str__(self) -> str:
@@ -26,8 +28,6 @@ class Person:
 
     @property
     def route(self):
-        if not self._route:
-            self._route = [self.position]
         return self._route
 
     @property
@@ -48,7 +48,7 @@ class Person:
         Returns:
             Room object
         """
-        return self.room.floor.building.get_room(Position(0, 0, 0))
+        return self.room.floor.building.get_room(Position(0, 2, 1))
 
     @property
     def exits(self):
@@ -76,6 +76,10 @@ class Person:
             Position(floor_num: int, row: int, col: int)
         """
         return self.room.position
+
+    @property
+    def route(self):
+        return self._route
 
     def whether_move(self) -> bool:
         """To judge if the person could move to next room
@@ -108,9 +112,15 @@ class Person:
         Args:
             target (Room): The target room
         """
-        self.route.append(target.position)
+        self._route.append(target.position)
         self.room = target
-        self.cost += 1
+        self._cost += 1
+
+    def reset(self):
+        """Reset this person to the original room and clean the cost and route but keep p"""
+        self.room = self._original_room
+        self._cost = 0
+        self._route = [self.position]
 
 
 class Exit:
@@ -268,6 +278,10 @@ class Room:
             col=self._position.col,
         )
 
+    @property
+    def persons(self) -> list[Person]:
+        return self._persons
+
 
 class Floor:
     def __init__(
@@ -362,6 +376,10 @@ class Floor:
         """
         return sum([room.population for room in self])
 
+    @property
+    def persons(self):
+        return chain(*[room.persons for room in self])
+
     def get_room(self, position: Point) -> Room:
         """Get the Room object by position
 
@@ -377,7 +395,7 @@ class Floor:
 
 
 class Building:
-    def __init__(self, floor_layouts) -> None:
+    def __init__(self, floor_layouts: dict) -> None:
         self._floors = self._floors_gen(floor_layouts=floor_layouts)
 
     def __str__(self) -> str:
@@ -404,6 +422,10 @@ class Building:
             int: Total people number of the building
         """
         return sum([floor.total_popularity for floor in self])
+
+    @property
+    def persons(self):
+        return chain(*[floor.persons for floor in self])
 
     def _floors_gen(
         self, floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
@@ -447,42 +469,68 @@ class Building:
             Point(position.row, position.col)
         )
 
+    def reset(self):
+        """Reset all people to their original room and clean their cost and route but keep p"""
+        for person in self.persons:
+            person.reset()
+
 
 class Simulator:
     def __init__(self, building: Building) -> None:
-        self.building = building
-        self.queue = Queue()
-        self.frame_num = 0
+        self._building = building
+        self._queue = Queue()
+        self._frame_num = 0
+
+    @property
+    def frame_num(self) -> int:
+        return self._frame_num
+
+    @property
+    def building(self) -> Building:
+        return self._building
+
+    @property
+    def persons(self) -> chain(Person):
+        return self.building.persons
+
+    def _reset(self):
+        """Reset the simulator and the building but keep p"""
+        self._frame_num = 0
+        self.building.reset()
 
     def _person_move(self):
         """Move all persons in building according to person.p and reduce rate"""
-        for floor in self.building.floors:
-            for room in floor:
-                for person in room:
-                    if not person.whether_move():
-                        continue
-                    self.queue.put((person, person.where_move()))
-        while not self.queue.empty():
+        for person in self.persons:
+            if not person.whether_move():
+                continue
+            self._queue.put((person, person.where_move()))
+        while not self._queue.empty():
             person: Person
             target: Room
-            person, target = self.queue.get()
+            person, target = self._queue.get()
             person.move(target)
 
     def _next_frame(self):
         """Predict the next Frame for the later animtion and iteration"""
         logging.debug(f'The frame_num is {self.frame_num}')
         self._person_move()
-        self.frame_num += 1
+        self._frame_num += 1
 
     def forward(self):
-        self.frame_num = 0
+        self._reset()
         while (
             self.building.get_room(Position(floor_num=0, row=2, col=1)).population
             != self.building.total_popularity
         ):
             self._next_frame()
         logging.info(f'Simulation ended within {self.frame_num} frames\n')
-        return self.frame_num
+
+
+def train(epoch_num):
+    simulator = Simulator(building=Building(floor_layouts=floor_layouts))
+    for _ in range(epoch_num):
+        simulator.forward()
+    logging.info(f"The fastest reslut is {simulator.frame_num} frames")
 
 
 if __name__ == "__main__":
@@ -492,12 +540,5 @@ if __name__ == "__main__":
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
     logging.debug(f"{floor_layouts}\n")
-    result = float("inf")
-    for _ in range(epoch_num):
-        building = Building(floor_layouts=floor_layouts)
-        simulator = Simulator(building=building)
-        temp = simulator.forward()
-        result = min(result, temp)
-    print(result)
-
+    train(epoch_num)
     print("Finish!")
