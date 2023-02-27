@@ -9,6 +9,7 @@ from random import random
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
+habit_factor = 0.5
 epoch_num = 10  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
@@ -42,12 +43,21 @@ class Person:
         target._persons.append(self)
 
     @property
+    def floor(self):
+        return self.room.floor
+
+    @property
+    def building(self):
+        return self.room.building
+
+    @property
     def destination(self):
         """The destination Room the person wanna go
 
         Returns:
             Room object
         """
+        # todo
         return self.room.floor.building.get_room(Position(0, 2, 1))
 
     @property
@@ -59,13 +69,25 @@ class Person:
         """
         return self.room.exits
 
+    @staticmethod
+    def _normalization(p: list[float]):
+        total = sum(p)
+        return [x / total for x in p]
+
     @property
     def p(self):
-        # todo 习惯概率 + 临场判断
+        """The result is determined by both habit and immediate decision.
+        The habit could be trained, and is determined by the last iteration.
+        The immediate decision is determined by the reduce rate of the exits which are at the same room as this exit
+
+        Returns:
+            list[float]: sum() = 1
+        """
+        p_immediate = self._normalization(p=[exit.reduce_rate for exit in self.exits])
         if not self._p:
             self._p = tensor(
-                [1 / len(self.exits) for _ in self.exits], requires_grad=True
-            )
+                [1 / len(self.exits) for _ in self.exits], device=device
+            ) * habit_factor + tensor(p_immediate, device=device) * (1 - habit_factor)
         return self._p
 
     @property
@@ -92,7 +114,7 @@ class Person:
         )
 
     def where_move(self) -> 'Room':
-        """To determine which room the person will go to next frame
+        """To determine which room the person will go to the next frame
 
         Returns:
             Room: The room the person will go to the next frame
@@ -150,6 +172,20 @@ class Exit:
             int | float: The factor that reflect the export capacity
         """
         return self._pass_factor * 0.7 if self.cross else self._pass_factor
+
+    @property
+    def reduce_rate(self):
+        """The passability, nothing to do with the people's choice,
+        but the density of the people in both outset and target
+
+        Returns:
+            float: the number of person reduce through this exit per frame
+        """
+        population = self._outset.population + self.target.population
+        area = self._outset.area + self.target.area
+        return (
+            1 / (population / area) * self.pass_factor if population else float("inf")
+        )
 
     @property
     def target(self):
@@ -220,18 +256,13 @@ class Room:
 
     @property
     def reduce_rate(self) -> int | float:
-        """The reduce rate of the room
+        """The reduce rate of the room, the sum of the exits reduce rate of the room
 
         Returns:
             int | float: The reduce rate of the room
         """
         return sum(
-            [
-                1 / (self.population / self.area) * exit.pass_factor
-                if self.population
-                else float("inf")
-                for exit in self.exits
-            ]
+            [exit.reduce_rate for exit in self.exits]
         )  # The population reduce rate is related to the density of people, the pass_factor and number of exits, the unit is people per frame
 
     @property
@@ -471,7 +502,8 @@ class Building:
 
     def reset(self):
         """Reset all people to their original room and clean their cost and route but keep p"""
-        for person in self.persons:
+        for person in list(self.persons):
+            # For the self.persons would change, clone the person list first
             person.reset()
 
 
@@ -524,12 +556,58 @@ class Simulator:
         ):
             self._next_frame()
         logging.info(f'Simulation ended within {self.frame_num} frames\n')
+        return self.frame_num
+
+
+class Optimizer:
+    def __init__(self, persons: list[Person], learning_rate: float) -> None:
+        """optimizer"""
+        self._persons = persons
+        self._lr = learning_rate
+
+    def step(self, loss):
+        for person in self._persons:
+            for position in person.route:
+                ...
+
+    def zero_grad(self):
+        ...
+
+
+class Criterion:
+    def __init__(self) -> None:
+        self.loss = 0
+
+    def __call__(self, output, target):
+        """Calculate loss
+
+        Args:
+            output (_type_): _description_
+            target (_type_): _description_
+
+        Returns:
+            Criterion: self
+        """
+        self.loss = output - target
+        return self.loss
 
 
 def train(epoch_num):
-    simulator = Simulator(building=Building(floor_layouts=floor_layouts))
+    building = Building(floor_layouts=floor_layouts)
+    simulator = Simulator(building=building)
+    criterion = Criterion()
+    optim = Optimizer(persons=building.persons, learning_rate=lr)
+    target = None
     for _ in range(epoch_num):
-        simulator.forward()
+        output = simulator.forward()
+        whether_better = True if (not target) or (output < target) else False
+        if whether_better and target:
+            loss = criterion(output=output, target=target)
+            optim.zero_grad()
+            # loss.backward()
+            optim.step(loss)
+        if whether_better or (not target):
+            target = output
     logging.info(f"The fastest reslut is {simulator.frame_num} frames")
 
 
