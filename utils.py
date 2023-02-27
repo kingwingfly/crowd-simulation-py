@@ -1,16 +1,18 @@
 from collections import namedtuple
 from itertools import chain
-from torch import tensor
+from torch import tensor, Tensor
+from torch.nn.functional import normalize
 from torch.cuda import is_available as is_cuda_available
 import json
 import logging
 from queue import Queue  # for storaging the move action of persons
 from random import random
+import matplotlib.pyplot as plt
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
-habit_factor = 0.5
-epoch_num = 10  # epoch number
+habit_factor = 0.5  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
@@ -21,10 +23,11 @@ class Person:
         self._cost = 0
         self._room = room  # The room contains position and exits info
         self._original_room = room
-        self._route = [self.position]
-        self._p = None
+        self._route: list['Exit'] = []
+        self._p: dict[int, dict[int, dict[int, Tensor]]] = {}
 
     def __str__(self) -> str:
+        # todo
         return str(self.p)
 
     @property
@@ -51,16 +54,6 @@ class Person:
         return self.room.building
 
     @property
-    def destination(self):
-        """The destination Room the person wanna go
-
-        Returns:
-            Room object
-        """
-        # todo
-        return self.room.floor.building.get_room(Position(0, 2, 1))
-
-    @property
     def exits(self):
         """The exits the room containing the person has
 
@@ -69,10 +62,15 @@ class Person:
         """
         return self.room.exits
 
-    @staticmethod
-    def _normalization(p: list[float]):
-        total = sum(p)
-        return [x / total for x in p]
+    def get_p(self, position: Position):
+        return (
+            self._p.get(position.floor_num, {})
+            .get(position.row, {})
+            .get(position.col, None)
+        )
+
+    def set_p(self, position: Position, target: Tensor):
+        self._p[position.floor_num][position.row][position.col] = target
 
     @property
     def p(self):
@@ -83,12 +81,28 @@ class Person:
         Returns:
             list[float]: sum() = 1
         """
-        p_immediate = self._normalization(p=[exit.reduce_rate for exit in self.exits])
-        if not self._p:
-            self._p = tensor(
-                [1 / len(self.exits) for _ in self.exits], device=device
-            ) * habit_factor + tensor(p_immediate, device=device) * (1 - habit_factor)
-        return self._p
+        p = self.get_p(self.position)
+        p_immediate = normalize(
+            tensor([exit.reduce_rate for exit in self.exits], device=device), p=1, dim=0
+        )
+        # todo This can be trained
+        if p is None:
+            self._p[self.position.floor_num] = self._p.get(self.position.floor_num, {})
+            self._p[self.position.floor_num][self.position.row] = self._p[
+                self.position.floor_num
+            ].get(self.position.row, {})
+            self.set_p(
+                position=self.position,
+                target=tensor([1 / len(self.exits) for _ in self.exits], device=device)
+                * habit_factor
+                + p_immediate * (1 - habit_factor),
+            )
+        if p is not None:
+            self.set_p(
+                position=self.position,
+                target=p * habit_factor + p_immediate * (1 - habit_factor),
+            )
+        return self._p[self.position.floor_num][self.position.row][self.position.col]
 
     @property
     def position(self) -> Position:
@@ -113,41 +127,48 @@ class Person:
             True if random() < self.room.reduce_rate / self.room.population else False
         )
 
-    def where_move(self) -> 'Room':
+    def where_move(self) -> 'Exit':
         """To determine which room the person will go to the next frame
 
         Returns:
             Room: The room the person will go to the next frame
         """
         r = random()
+        ps = self.p.tolist()
         for i in range(len(self.exits)):
-            p = self.p.tolist()[i]
+            p = ps[i]
             if r - p <= 0 and p != 0:
-                target = self.exits[i].target
-                logging.debug(f'Person move from {self.position} to {target.position}')
+                target = self.exits[i]
+                logging.debug(
+                    f'Person move from {self.position} to {target.target.position}'
+                )
                 return target
             r -= p
 
-    def move(self, target: "Room") -> None:
+    def move(self, exit: "Exit") -> None:
         """Move the person to a certain room
 
         Args:
             target (Room): The target room
         """
-        self._route.append(target.position)
-        self.room = target
+        self._route.append(exit)
+        self.room = exit.target
         self._cost += 1
 
     def reset(self):
         """Reset this person to the original room and clean the cost and route but keep p"""
         self.room = self._original_room
         self._cost = 0
-        self._route = [self.position]
+        self._route = []
 
 
 class Exit:
     def __init__(
-        self, outset: "Room", target: "Room", pass_factor: int | float
+        self,
+        building: 'Building',
+        outset: "Room",
+        target: "Room",
+        pass_factor: int | float,
     ) -> None:
         """init an exit
 
@@ -156,13 +177,18 @@ class Exit:
             target (Room): The room which the exit goes to
             pass_factor (int | float): A factor for the pass rate of the exit
         """
+        self._building = building
         self._pass_factor = pass_factor
         self._outset = outset
         self._target = target
         self.cross = False  # personnel cross-flow influence the pass_factor
 
     def __str__(self):
-        return f"Exit: From {self._outset.position} to {self.target.position}"
+        return f"Exit: From {self.outset.position} to {self.target.position}"
+
+    @property
+    def building(self):
+        return self._building
 
     @property
     def pass_factor(self):
@@ -181,8 +207,10 @@ class Exit:
         Returns:
             float: the number of person reduce through this exit per frame
         """
-        population = self._outset.population + self.target.population
-        area = self._outset.area + self.target.area
+        population = self.outset.population + (
+            0 if self.target in self.building.destinations else self.target.population
+        )
+        area = self.outset.area + self.target.area
         return (
             1 / (population / area) * self.pass_factor if population else float("inf")
         )
@@ -190,6 +218,10 @@ class Exit:
     @property
     def target(self):
         return self._target
+
+    @property
+    def outset(self):
+        return self._outset
 
 
 class Room:
@@ -226,6 +258,7 @@ class Room:
             self._exits = (
                 [
                     Exit(
+                        building=self.building,
                         outset=self,
                         target=self.floor.get_room(
                             Point(
@@ -240,6 +273,7 @@ class Room:
                 if self._exits_positions
                 else [
                     Exit(
+                        building=self.building,
                         outset=self,
                         target=self.building.get_room(
                             Position(
@@ -458,6 +492,17 @@ class Building:
     def persons(self):
         return chain(*[floor.persons for floor in self])
 
+    @property
+    def destinations(self):
+        """The destination Rooms of the building.
+
+        Returns:
+            Room object
+        """
+        # todo
+        positions = [Position(0, 2, 1)]
+        return [self.get_room(position) for position in positions]
+
     def _floors_gen(
         self, floor_layouts: dict[str, dict[str, dict[str, str | int | float]]]
     ) -> list[Floor]:
@@ -538,7 +583,7 @@ class Simulator:
             self._queue.put((person, person.where_move()))
         while not self._queue.empty():
             person: Person
-            target: Room
+            target: Exit
             person, target = self._queue.get()
             person.move(target)
 
@@ -565,10 +610,14 @@ class Optimizer:
         self._persons = persons
         self._lr = learning_rate
 
-    def step(self, loss):
+    def step(self, loss: int):
         for person in self._persons:
-            for position in person.route:
-                ...
+            for exit in person.route:
+                p_old = person.get_p(position=exit.outset.position).tolist()
+                i = exit.outset.exits.index(exit)
+                p_old[i] = max(p_old[i] - loss * self._lr, 0)
+                p_new = normalize(tensor(p_old, device=device), p=1, dim=0)
+                person.set_p(position=exit.outset.position, target=p_new)
 
     def zero_grad(self):
         ...
@@ -597,18 +646,17 @@ def train(epoch_num):
     simulator = Simulator(building=building)
     criterion = Criterion()
     optim = Optimizer(persons=building.persons, learning_rate=lr)
-    target = None
+    target = float("inf")
     for _ in range(epoch_num):
         output = simulator.forward()
-        whether_better = True if (not target) or (output < target) else False
-        if whether_better and target:
-            loss = criterion(output=output, target=target)
-            optim.zero_grad()
-            # loss.backward()
-            optim.step(loss)
-        if whether_better or (not target):
-            target = output
-    logging.info(f"The fastest reslut is {simulator.frame_num} frames")
+        target = min(target, output)
+        loss = criterion(output=output, target=target)
+        optim.zero_grad()
+        optim.step(loss)
+    logging.info(f"The fastest reslut is {target} frames")
+
+def draw_loss(epoch, loss):
+    ...
 
 
 if __name__ == "__main__":
