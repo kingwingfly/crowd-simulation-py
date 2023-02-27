@@ -10,7 +10,7 @@ from random import random
 import matplotlib.pyplot as plt
 
 device = "cuda" if is_cuda_available() else "cpu"
-lr = 0.01  # Learning rate
+lr = 0.1  # Learning rate
 habit_factor = 0.5  # between [0, 1], indicates the degree to which people's choices are influenced by habits
 epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
@@ -647,16 +647,24 @@ def train(epoch_num):
     criterion = Criterion()
     optim = Optimizer(persons=building.persons, learning_rate=lr)
     target = float("inf")
-    for _ in range(epoch_num):
+    train_info = []
+    for epoch in range(epoch_num):
         output = simulator.forward()
         target = min(target, output)
         loss = criterion(output=output, target=target)
         optim.zero_grad()
         optim.step(loss)
+        train_info.append((epoch, loss))
     logging.info(f"The fastest reslut is {target} frames")
+    return train_info
 
-def draw_loss(epoch, loss):
-    ...
+
+def draw_loss(train_info: list[(int, float)]):
+    plt.xlabel = 'epoch_num'
+    plt.ylabel = 'loss'
+    epoch, loss = [i[0] for i in train_info], [i[1] for i in train_info]
+    plt.scatter(epoch, loss)
+    plt.show()
 
 
 if __name__ == "__main__":
@@ -666,5 +674,6 @@ if __name__ == "__main__":
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
     logging.debug(f"{floor_layouts}\n")
-    train(epoch_num)
+    train_info = train(epoch_num)
+    draw_loss(train_info=train_info)
     print("Finish!")
