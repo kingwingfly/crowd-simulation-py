@@ -6,13 +6,17 @@ from torch.cuda import is_available as is_cuda_available
 import json
 import logging
 from queue import Queue  # for storaging the move action of persons
+from queue import PriorityQueue
 from random import random
 import matplotlib.pyplot as plt
 import math
+from pprint import pprint
 
 device = "cuda" if is_cuda_available() else "cpu"
-lr = 0.01  # Learning rate
-habit_factor = 0.5  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+lr = 1  # Learning rate
+habit_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+destance_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by destance to destinations
+immdediate_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by immediate situation
 epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
@@ -97,16 +101,28 @@ class Person:
 
     @property
     def p(self):
-        """The result is determined by both habit and immediate decision.
+        """The result is determined by habit, immediate decision and destance to the destinations.
         The habit could be trained, and is determined by the last iteration.
-        The immediate decision is determined by the reduce rate of the exits which are at the same room as this exit
+        The immediate decision is determined by the reduce rate of the exits which are at the same room as this exit.
+        The destance is calculated by Dijkstra
 
         Returns:
-            list[float]: sum() = 1
+            Tensor: sum() = 1
         """
         p = self.get_p(self.position)
         p_immediate = normalize(
             tensor([exit.reduce_rate for exit in self.exits], device=device), p=1, dim=0
+        )
+        p_destance = normalize(
+            tensor(
+                [
+                    1 / exit.target.destance if exit.target.destance else 1.0
+                    for exit in self.exits
+                ],
+                device=device,
+            ),
+            p=1,
+            dim=0,
         )
         # todo This can be trained
         if p is None:
@@ -118,12 +134,15 @@ class Person:
                 position=self.position,
                 target=tensor([1 / len(self.exits) for _ in self.exits], device=device)
                 * habit_factor
-                + p_immediate * (1 - habit_factor),
+                + p_immediate * immdediate_factor
+                + p_destance * destance_factor,
             )
         if p is not None:
             self.set_p(
                 position=self.position,
-                target=p * habit_factor + p_immediate * (1 - habit_factor),
+                target=p * habit_factor
+                + p_immediate * immdediate_factor
+                + p_destance * destance_factor,
             )
         return self.get_p(position=self.position)
 
@@ -177,6 +196,13 @@ class Person:
         """
         self._route.append(exit)
         self.room = exit.target
+
+    def show_route(self):
+        pprint(self._p)
+        for exit in self.route[:-1:]:
+            print(f'{exit.outset.position}=>', end='')
+        print(self.route[-1].target.position)
+        print('\n')
 
     def reset(self):
         """Reset this person to the original room and clean the cost and route but keep p"""
@@ -368,6 +394,25 @@ class Room:
     @property
     def persons(self) -> list[Person]:
         return self._persons
+
+    @property
+    def destance(self) -> int:
+        myqueue = PriorityQueue()
+        myqueue.put((0, self.position))
+        cost_so_far = {self.position: 0}
+        while not myqueue.empty():
+            current: Room = self.building.get_room(myqueue.get()[1])
+            if current in self.building.destinations:
+                break
+            for next_room in [exit.target for exit in current.exits]:
+                new_cost = cost_so_far[current.position] + 1
+                if (
+                    next_room.position not in cost_so_far
+                    or new_cost < cost_so_far[next_room.position]
+                ):
+                    cost_so_far[next_room.position] = new_cost
+                    myqueue.put((new_cost, next_room.position))
+        return cost_so_far[current.position]
 
 
 class Floor:
@@ -641,6 +686,8 @@ class Optimizer:
     def step(self, loss: float):
         loss *= self.lr
         for person in self._building.persons:
+            if person.cost > 10:
+                person.show_route()
             for exit in person.route:
                 i = exit.outset.exits.index(exit)
                 person.modify_p(exit=exit, exit_index=i, loss=loss)
@@ -699,7 +746,7 @@ def train(epoch_num):
 def draw_loss(train_info: list[(int, float)]):
     plt.xlabel = 'epoch_num'
     plt.ylabel = 'loss'
-    epoch, loss = [i[0] for i in train_info], [i[1] for i in train_info]
+    epoch, loss = [i[0] for i in train_info[1::]], [i[1] for i in train_info[1::]]
     plt.scatter(epoch, loss)
     # plt.show()
     plt.savefig('./result.png')
