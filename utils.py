@@ -8,10 +8,11 @@ import logging
 from queue import Queue  # for storaging the move action of persons
 from random import random
 import matplotlib.pyplot as plt
+import numpy as np
 
 device = "cuda" if is_cuda_available() else "cpu"
-lr = 0.1  # Learning rate
-habit_factor = 0.5  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+lr = 0.01  # Learning rate
+habit_factor = 0.9  # between [0, 1], indicates the degree to which people's choices are influenced by habits
 epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
@@ -71,6 +72,25 @@ class Person:
 
     def set_p(self, position: Position, target: Tensor):
         self._p[position.floor_num][position.row][position.col] = target
+
+    def modify_p(self, exit: 'Exit', exit_index, loss):
+        """modify the p of the room where the exit is
+
+        Args:
+            exit (Exit): exit
+            exit_index (_type_): the index of the exit's p
+            loss (_type_): the loss value
+        """
+        position = exit.outset.position
+        old_value = self._p[position.floor_num][position.row][position.col][exit_index]
+        new_value = max(old_value - loss, 0)
+        self._p[position.floor_num][position.row][position.col][exit_index] = new_value
+        self.set_p(
+            position,
+            normalize(
+                self._p[position.floor_num][position.row][position.col], p=1, dim=0
+            ),
+        )
 
     @property
     def p(self):
@@ -613,11 +633,9 @@ class Optimizer:
     def step(self, loss: int):
         for person in self._persons:
             for exit in person.route:
-                p_old = person.get_p(position=exit.outset.position).tolist()
                 i = exit.outset.exits.index(exit)
-                p_old[i] = max(p_old[i] - loss * self._lr, 0)
-                p_new = normalize(tensor(p_old, device=device), p=1, dim=0)
-                person.set_p(position=exit.outset.position, target=p_new)
+                loss = loss * self._lr
+                person.modify_p(exit=exit, exit_index=i, loss=loss)
 
     def zero_grad(self):
         ...
@@ -655,6 +673,8 @@ def train(epoch_num):
         optim.zero_grad()
         optim.step(loss)
         train_info.append((epoch, loss))
+        logging.info(f"Finish epoh: {epoch}\t loss rate is {loss}")
+        print(f"Finish epoch: {epoch}\t loss rate is {loss}")
     logging.info(f"The fastest reslut is {target} frames")
     return train_info
 
@@ -664,7 +684,8 @@ def draw_loss(train_info: list[(int, float)]):
     plt.ylabel = 'loss'
     epoch, loss = [i[0] for i in train_info], [i[1] for i in train_info]
     plt.scatter(epoch, loss)
-    plt.show()
+    # plt.show()
+    plt.savefig('./result.png')
 
 
 if __name__ == "__main__":
