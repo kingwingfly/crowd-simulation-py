@@ -629,12 +629,17 @@ class Optimizer:
         """optimizer"""
         self._persons = persons
         self._lr = learning_rate
+        self.epoch = 0
+
+    @property
+    def lr(self):
+        return self._lr - self._lr * self.epoch / epoch_num * 0.8
 
     def step(self, loss: int):
         for person in self._persons:
             for exit in person.route:
                 i = exit.outset.exits.index(exit)
-                loss = loss * self._lr
+                loss = loss * self.lr
                 person.modify_p(exit=exit, exit_index=i, loss=loss)
 
     def zero_grad(self):
@@ -655,7 +660,7 @@ class Criterion:
         Returns:
             Criterion: self
         """
-        self.loss = output - target
+        self.loss = 0 if target==float("inf") else output - target
         return self.loss
 
 
@@ -668,8 +673,8 @@ def train(epoch_num):
     train_info = []
     for epoch in range(epoch_num):
         output = simulator.forward()
-        target = min(target, output)
         loss = criterion(output=output, target=target)
+        target = min(target, output)
         optim.zero_grad()
         optim.step(loss)
         train_info.append((epoch, loss))
