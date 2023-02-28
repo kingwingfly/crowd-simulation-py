@@ -1,5 +1,7 @@
 import numpy as np
 from torch import tensor
+from torch.nn.functional import normalize
 
-a = float("inf")
-print(a == float("inf"))
+dic = {1: tensor([1, 2, 3], dtype=float)}
+
+print(normalize(dic[1], p=1, dim=0))

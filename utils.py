@@ -8,11 +8,11 @@ import logging
 from queue import Queue  # for storaging the move action of persons
 from random import random
 import matplotlib.pyplot as plt
-import numpy as np
+import math
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 0.01  # Learning rate
-habit_factor = 0.9  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+habit_factor = 0.5  # between [0, 1], indicates the degree to which people's choices are influenced by habits
 epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
@@ -21,7 +21,6 @@ Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 class Person:
     # todo 结伴
     def __init__(self, room: "Room") -> None:
-        self._cost = 0
         self._room = room  # The room contains position and exits info
         self._original_room = room
         self._route: list['Exit'] = []
@@ -29,11 +28,15 @@ class Person:
 
     def __str__(self) -> str:
         # todo
-        return str(self.p)
+        return f"Position: {self.position} P: {self.p}"
 
     @property
     def route(self):
         return self._route
+
+    @property
+    def cost(self):
+        return len(self.route)
 
     @property
     def room(self):
@@ -79,11 +82,11 @@ class Person:
         Args:
             exit (Exit): exit
             exit_index (_type_): the index of the exit's p
-            loss (_type_): the loss value
+            loss (_type_): the loss * lr value
         """
         position = exit.outset.position
         old_value = self._p[position.floor_num][position.row][position.col][exit_index]
-        new_value = max(old_value - loss, 0)
+        new_value = max(old_value - loss, 0.001)
         self._p[position.floor_num][position.row][position.col][exit_index] = new_value
         self.set_p(
             position,
@@ -122,7 +125,7 @@ class Person:
                 position=self.position,
                 target=p * habit_factor + p_immediate * (1 - habit_factor),
             )
-        return self._p[self.position.floor_num][self.position.row][self.position.col]
+        return self.get_p(position=self.position)
 
     @property
     def position(self) -> Position:
@@ -154,7 +157,8 @@ class Person:
             Room: The room the person will go to the next frame
         """
         r = random()
-        ps = self.p.tolist()
+        ps = self.p
+        logging.debug(f'{self.position} {ps}')
         for i in range(len(self.exits)):
             p = ps[i]
             if r - p <= 0 and p != 0:
@@ -173,12 +177,10 @@ class Person:
         """
         self._route.append(exit)
         self.room = exit.target
-        self._cost += 1
 
     def reset(self):
         """Reset this person to the original room and clean the cost and route but keep p"""
         self.room = self._original_room
-        self._cost = 0
         self._route = []
 
 
@@ -232,7 +234,7 @@ class Exit:
         )
         area = self.outset.area + self.target.area
         return (
-            1 / (population / area) * self.pass_factor if population else float("inf")
+            1 / (population / area) * self.pass_factor if population else float('inf')
         )
 
     @property
@@ -601,6 +603,7 @@ class Simulator:
             if not person.whether_move():
                 continue
             self._queue.put((person, person.where_move()))
+
         while not self._queue.empty():
             person: Person
             target: Exit
@@ -625,22 +628,23 @@ class Simulator:
 
 
 class Optimizer:
-    def __init__(self, persons: list[Person], learning_rate: float) -> None:
+    def __init__(self, building: Building, learning_rate: float) -> None:
         """optimizer"""
-        self._persons = persons
+        self._building = building
         self._lr = learning_rate
         self.epoch = 0
 
     @property
     def lr(self):
-        return self._lr - self._lr * self.epoch / epoch_num * 0.8
+        return self._lr - self._lr * (self.epoch - epoch_num / 2) / epoch_num
 
-    def step(self, loss: int):
-        for person in self._persons:
+    def step(self, loss: float):
+        loss *= self.lr
+        for person in self._building.persons:
             for exit in person.route:
                 i = exit.outset.exits.index(exit)
-                loss = loss * self.lr
                 person.modify_p(exit=exit, exit_index=i, loss=loss)
+        self.epoch += 1
 
     def zero_grad(self):
         ...
@@ -660,7 +664,14 @@ class Criterion:
         Returns:
             Criterion: self
         """
-        self.loss = 0 if target==float("inf") else output - target
+        if target == float("inf"):
+            self.loss = 0
+            return self.loss
+        x = (output - target) / 10
+        if x <= 0:
+            self.loss = math.exp(x) - 1
+        else:
+            self.loss = 1 - 1.1 ** (-x)
         return self.loss
 
 
@@ -668,19 +679,20 @@ def train(epoch_num):
     building = Building(floor_layouts=floor_layouts)
     simulator = Simulator(building=building)
     criterion = Criterion()
-    optim = Optimizer(persons=building.persons, learning_rate=lr)
-    target = float("inf")
+    optim = Optimizer(building=building, learning_rate=lr)
+    best = float("inf")
     train_info = []
     for epoch in range(epoch_num):
         output = simulator.forward()
-        loss = criterion(output=output, target=target)
-        target = min(target, output)
+        loss = criterion(output=output, target=best)
+        best = min(best, output)
         optim.zero_grad()
         optim.step(loss)
         train_info.append((epoch, loss))
-        logging.info(f"Finish epoh: {epoch}\t loss rate is {loss}")
-        print(f"Finish epoch: {epoch}\t loss rate is {loss}")
-    logging.info(f"The fastest reslut is {target} frames")
+        logging.info(f"Finish epoh: {epoch}\t loss is {loss}")
+        print(f"Finish epoch: {epoch}\t loss is {loss}")
+    logging.info(f"The fastest reslut is {best} frames")
+    print(f"The fastest reslut is {best} frames")
     return train_info
 
 
