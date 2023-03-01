@@ -10,13 +10,12 @@ from queue import PriorityQueue
 from random import random
 import matplotlib.pyplot as plt
 import math
-from pprint import pprint
 
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 1  # Learning rate
-habit_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by habits
-destance_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by destance to destinations
-immdediate_factor = 0.7  # between [0, 1], indicates the degree to which people's choices are influenced by immediate situation
+habit_factor = 0.25  # between [0, 1], indicates the degree to which people's choices are influenced by habits
+destance_factor = 0.45  # between [0, 1], indicates the degree to which people's choices are influenced by destance to destinations
+immdediate_factor = 0.3  # between [0, 1], indicates the degree to which people's choices are influenced by immediate situation
 epoch_num = 100  # epoch number
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
@@ -78,7 +77,15 @@ class Person:
         )
 
     def set_p(self, position: Position, target: Tensor):
-        self._p[position.floor_num][position.row][position.col] = target
+        """Normalize the target and set it as the p at the position given
+
+        Args:
+            position (Position): The position of p need change
+            target (Tensor): p_tensor
+        """
+        self._p[position.floor_num][position.row][position.col] = normalize(
+            target, p=1, dim=0
+        )
 
     def modify_p(self, exit: 'Exit', exit_index, loss):
         """modify the p of the room where the exit is
@@ -90,14 +97,11 @@ class Person:
         """
         position = exit.outset.position
         old_value = self._p[position.floor_num][position.row][position.col][exit_index]
+        # print(f'Old: {self._p[position.floor_num][position.row][position.col]}')
         new_value = max(old_value - loss, 0.001)
         self._p[position.floor_num][position.row][position.col][exit_index] = new_value
-        self.set_p(
-            position,
-            normalize(
-                self._p[position.floor_num][position.row][position.col], p=1, dim=0
-            ),
-        )
+        self.set_p(position, self._p[position.floor_num][position.row][position.col])
+        # print(f'New: {self._p[position.floor_num][position.row][position.col]}')
 
     @property
     def p(self):
@@ -111,12 +115,17 @@ class Person:
         """
         p = self.get_p(self.position)
         p_immediate = normalize(
-            tensor([exit.reduce_rate for exit in self.exits], device=device), p=1, dim=0
-        )
+            tensor(
+                [exit.reduce_rate for exit in self.exits],
+                device=device,
+            ),
+            p=1,
+            dim=0,
+        )  # todo consider stairs
         p_destance = normalize(
             tensor(
                 [
-                    1 / exit.target.destance if exit.target.destance else 1.0
+                    1 / exit.target.destance if exit.target.destance else 1000.0
                     for exit in self.exits
                 ],
                 device=device,
@@ -132,19 +141,20 @@ class Person:
             ].get(self.position.row, {})
             self.set_p(
                 position=self.position,
-                target=tensor([1 / len(self.exits) for _ in self.exits], device=device)
-                * habit_factor
-                + p_immediate * immdediate_factor
-                + p_destance * destance_factor,
+                target=tensor([1 / len(self.exits) for _ in self.exits], device=device),
             )
-        if p is not None:
-            self.set_p(
-                position=self.position,
-                target=p * habit_factor
-                + p_immediate * immdediate_factor
-                + p_destance * destance_factor,
-            )
-        return self.get_p(position=self.position)
+        p_result = normalize(
+            self.get_p(position=self.position) * habit_factor
+            + p_destance * destance_factor
+            + p_immediate * immdediate_factor,
+            p=1,
+            dim=0,
+        )
+        # todo annotate this when publish
+        # if self.position == Position(1, 1, 1):
+        #     print(p)
+        # print([exit.target.position for exit in self.exits])
+        return p_result
 
     @property
     def position(self) -> Position:
@@ -166,7 +176,10 @@ class Person:
             bool: True for move to next room, False for keep the old room
         """
         return (
-            True if random() < self.room.reduce_rate / self.room.population else False
+            True
+            if self.room not in self.building.destinations
+            and random() < self.room.reduce_rate / self.room.population
+            else False
         )
 
     def where_move(self) -> 'Exit':
@@ -177,7 +190,6 @@ class Person:
         """
         r = random()
         ps = self.p
-        logging.debug(f'{self.position} {ps}')
         for i in range(len(self.exits)):
             p = ps[i]
             if r - p <= 0 and p != 0:
@@ -198,11 +210,11 @@ class Person:
         self.room = exit.target
 
     def show_route(self):
-        pprint(self._p)
-        for exit in self.route[:-1:]:
-            print(f'{exit.outset.position}=>', end='')
-        print(self.route[-1].target.position)
-        print('\n')
+        t = 'A lost person:\n'
+        for exit in self.route:
+            t += f'{exit.outset.position} =>\n'
+        t += f'{self.route[-1].target.position}\n'
+        logging.debug(t)
 
     def reset(self):
         """Reset this person to the original room and clean the cost and route but keep p"""
@@ -255,13 +267,13 @@ class Exit:
         Returns:
             float: the number of person reduce through this exit per frame
         """
-        population = self.outset.population + (
-            0 if self.target in self.building.destinations else self.target.population
-        )
+        population = (
+            self.outset.population + self.target.population
+            if self.target._exits_positions
+            else 0.001
+        )  # 如果通向建筑出口或者楼梯，人数视作0.001
         area = self.outset.area + self.target.area
-        return (
-            1 / (population / area) * self.pass_factor if population else float('inf')
-        )
+        return 1 / (population / area) * self.pass_factor if population else 1000
 
     @property
     def target(self):
@@ -657,7 +669,6 @@ class Simulator:
 
     def _next_frame(self):
         """Predict the next Frame for the later animtion and iteration"""
-        logging.debug(f'The frame_num is {self.frame_num}')
         self._person_move()
         self._frame_num += 1
 
@@ -684,9 +695,9 @@ class Optimizer:
         return self._lr - self._lr * (self.epoch - epoch_num / 2) / epoch_num
 
     def step(self, loss: float):
-        loss *= self.lr
+        loss *= self.lr if loss > 0 else self.lr * 10
         for person in self._building.persons:
-            if person.cost > 10:
+            if person.cost > 5:
                 person.show_route()
             for exit in person.route:
                 i = exit.outset.exits.index(exit)
@@ -736,8 +747,12 @@ def train(epoch_num):
         optim.zero_grad()
         optim.step(loss)
         train_info.append((epoch, loss))
-        logging.info(f"Finish epoh: {epoch}\t loss is {loss}")
-        print(f"Finish epoch: {epoch}\t loss is {loss}")
+        logging.info(
+            f"Finish epoch: {epoch}\twithin {output} frames; current best is {best}; loss is {loss}"
+        )
+        print(
+            f"Finish epoch: {epoch}\twithin {output} frames; current best is {best}; loss is {loss}"
+        )
     logging.info(f"The fastest reslut is {best} frames")
     print(f"The fastest reslut is {best} frames")
     return train_info
@@ -758,7 +773,7 @@ if __name__ == "__main__":
     )
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
-    logging.debug(f"{floor_layouts}\n")
+    logging.debug(f"The floor layouts:\n{floor_layouts}\n")
     train_info = train(epoch_num)
     draw_loss(train_info=train_info)
     print("Finish!")
