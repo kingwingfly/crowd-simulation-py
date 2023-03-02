@@ -11,12 +11,16 @@ from random import random
 import matplotlib.pyplot as plt
 import math
 
+# TODO make this file module
+
 device = "cuda" if is_cuda_available() else "cpu"
 lr = 1  # Learning rate
 habit_factor = 0.25  # between [0, 1], indicates the degree to which people's choices are influenced by habits
-destance_factor = 0.45  # between [0, 1], indicates the degree to which people's choices are influenced by destance to destinations
+distance_factor = 0.45  # between [0, 1], indicates the degree to which people's choices are influenced by distance to destinations
 immdediate_factor = 0.3  # between [0, 1], indicates the degree to which people's choices are influenced by immediate situation
 epoch_num = 100  # epoch number
+
+
 Point = namedtuple('Point', ['row', 'col'])
 Position = namedtuple('Position', ['floor_num', 'row', 'col'])
 
@@ -105,10 +109,10 @@ class Person:
 
     @property
     def p(self):
-        """The result is determined by habit, immediate decision and destance to the destinations.
+        """The result is determined by habit, immediate decision and distance to the destinations.
         The habit could be trained, and is determined by the last iteration.
         The immediate decision is determined by the reduce rate of the exits which are at the same room as this exit.
-        The destance is calculated by Dijkstra
+        The distance is calculated by Dijkstra
 
         Returns:
             Tensor: sum() = 1
@@ -116,16 +120,19 @@ class Person:
         p = self.get_p(self.position)
         p_immediate = normalize(
             tensor(
-                [exit.reduce_rate for exit in self.exits],
+                [
+                    exit.reduce_rate if exit.target._exits_positions else 1000.0
+                    for exit in self.exits
+                ],
                 device=device,
             ),
             p=1,
             dim=0,
         )  # todo consider stairs
-        p_destance = normalize(
+        p_distance = normalize(
             tensor(
                 [
-                    1 / exit.target.destance if exit.target.destance else 1000.0
+                    1 / exit.target.distance if exit.target.distance else 1000.0
                     for exit in self.exits
                 ],
                 device=device,
@@ -145,7 +152,7 @@ class Person:
             )
         p_result = normalize(
             self.get_p(position=self.position) * habit_factor
-            + p_destance * destance_factor
+            + p_distance * distance_factor
             + p_immediate * immdediate_factor,
             p=1,
             dim=0,
@@ -188,6 +195,15 @@ class Person:
         Returns:
             Room: The room the person will go to the next frame
         """
+        # choose the biggest posibility
+        greatest = 0
+        greatest_index = 0
+        ps = self.p
+        for i in range(len(ps)):
+            if ps[i] > greatest:
+                greatest, greatest_index = ps[i], i
+        return self.exits[greatest_index]
+        # choose randomly
         r = random()
         ps = self.p
         for i in range(len(self.exits)):
@@ -269,7 +285,7 @@ class Exit:
         """
         population = (
             self.outset.population + self.target.population
-            if self.target._exits_positions
+            if self.target not in self.building.destinations
             else 0.001
         )  # 如果通向建筑出口或者楼梯，人数视作0.001
         area = self.outset.area + self.target.area
@@ -408,7 +424,7 @@ class Room:
         return self._persons
 
     @property
-    def destance(self) -> int:
+    def distance(self) -> int:
         myqueue = PriorityQueue()
         myqueue.put((0, self.position))
         cost_so_far = {self.position: 0}
@@ -692,7 +708,8 @@ class Optimizer:
 
     @property
     def lr(self):
-        return self._lr - self._lr * (self.epoch - epoch_num / 2) / epoch_num
+        x = self.epoch / epoch_num
+        return (-(x**2) + x + 1) * self._lr
 
     def step(self, loss: float):
         loss *= self.lr if loss > 0 else self.lr * 10
@@ -725,11 +742,11 @@ class Criterion:
         if target == float("inf"):
             self.loss = 0
             return self.loss
-        x = (output - target) / 10
+        x = output - target
         if x <= 0:
             self.loss = math.exp(x) - 1
         else:
-            self.loss = 1 - 1.1 ** (-x)
+            self.loss = 1 / (1 + math.exp(10 - x))
         return self.loss
 
 
@@ -739,6 +756,7 @@ def train(epoch_num):
     criterion = Criterion()
     optim = Optimizer(building=building, learning_rate=lr)
     best = float("inf")
+    results = []
     train_info = []
     for epoch in range(epoch_num):
         output = simulator.forward()
@@ -746,6 +764,7 @@ def train(epoch_num):
         best = min(best, output)
         optim.zero_grad()
         optim.step(loss)
+        results.append(output)
         train_info.append((epoch, loss))
         logging.info(
             f"Finish epoch: {epoch}\twithin {output} frames; current best is {best}; loss is {loss}"
@@ -753,6 +772,12 @@ def train(epoch_num):
         print(
             f"Finish epoch: {epoch}\twithin {output} frames; current best is {best}; loss is {loss}"
         )
+    average = sum(results) / len(results)
+    variance = sum([(result - average) ** 2 for result in results]) / len(results)
+    logging.info(f"The average reslut is {average} frames")
+    print(f"The average reslut is {average} frames")
+    logging.info(f"The variance reslut is {variance}")
+    print(f"The variance reslut is {variance}")
     logging.info(f"The fastest reslut is {best} frames")
     print(f"The fastest reslut is {best} frames")
     return train_info
