@@ -6,7 +6,7 @@ time built: 2023-02-22 16:10
 last change: 2023-03-02 14:15  
 ---
 # 架构
-![架构.png](https://notesoflouis.oss-cn-chengdu.aliyuncs.com/imgs/%E6%9E%B6%E6%9E%84.png)
+![架构.png](./static/%E6%9E%B6%E6%9E%84.png)
 
 # Building
 `Building` 建筑物对象，包含多个 `Floor`
@@ -96,20 +96,19 @@ exit_i.reduce\_rate, & exit_i.target不是楼道或者建筑出口\\
 \end{cases}
 $$
 
-
 $$
 normalize(P_2)
 $$
 
-$P_3$ 的计算
+$P_3$ 的计算，由于自然界普遍存在吸引力反比于距离二次方，故
 $$
 distance_i = exit_i.target.distance
 $$
 $$
 p_i = 
 \begin{cases}
-\dfrac{1}{distance_i}, & distance_i>0\\
-1000, & distance_i = 0
+\dfrac{1}{distance_i^2}, & distance_i>0\\
+1\times10^6, & distance_i = 0
 \end{cases}
 $$
 $$
@@ -117,7 +116,7 @@ normalize(P_3)
 $$
 对于 $P_3$，有
 $$
-\dfrac {p_{i+1}}{p_i}=\dfrac{d+\Delta d}{d}=1 + \dfrac{\Delta d}{d}
+\dfrac {p_{i+1}}{p_i}=\dfrac{(d+\Delta d)^2}{d^2}=1 + \dfrac{2 \Delta d}{d} + \dfrac{\Delta d^2}{d^2}
 $$
 可以看出，若 $\Delta d$ 不变，$d$ 越大，选择两个出口的概率差别越小
 即路程较远时，人们往往无法很好衡量远近，以路程为依据决定路线表现出纠结的心理，在模型中表现为选择各个 `Exit` 的可能接近，此时更多地依赖习惯和临场决策，这符合实际情况
@@ -129,11 +128,14 @@ $epoch\_num$：迭代次数
 $k_1$：习惯所占权重
 $k_2$：临场判断所占权重
 $k_3$：距离建筑出口距离所占权重
+$\rho$：挥发系数
 
 对 `Building` 中的每个 `Person`，执行以下步骤：
 ## 1. 判断此人能否转移
 $$
 \begin{aligned}
+\text {if}\quad& 未到达终点 \quad \text{应当转移 else 不应当转移}\\
+\\
 r &= random()\\
 \\
 \text {if}\quad r &<\dfrac{room.reduce\_rate}{room.population}\quad \text{应当转移 else 不应当转移}
@@ -142,35 +144,39 @@ $$
 仅当此 `Person` 应当转移时，才执行后续步骤，否则直接处理下一个 `Person`
 ## 2. 确定 Exit
 按上述方法计算该 `Person` 在当前 `Room` 的 `P`
-选择 $p_i$ 最大的 `Exit` 作为转移的方向 
+选择 $p_i$ 最大且没有走过的 `Exit` 作为转移的方向 
 将此人及其转移方向 (Person, Exit)存入队列
 ## 3. 执行转移
-重复步骤 1. 和 2.，
-每次重复，从队列中拿出所有(Person, Exit)，执行转移
+重复步骤 1. 和 2.，遍历完所有 `Person` 后
+从队列中拿出所有(Person, Exit)，执行转移
 每将所有人遍历一遍，称为一帧
 直到所有 `Person` 都到达了设定的建筑出口 `Room`
-返回所用的总帧数作为 `output`
 ## 4. 计算损失
+遍历每个 `Person`
+`person.cost` 表示某人到建筑出口消耗的帧数
+`best` 表示该人在历次迭代中的最少消耗帧数
+`output` 表示本次模拟所有人到达建筑出口消耗的帧数
 $$
 \begin{aligned}
-x &= output - best\\
+x &= person.cost - best\\
 \\
 loss &=
 \begin{cases}
 e^{\frac x 2}-1, & x\le0\\
-\dfrac {1}{1+e^{10-x}}, & x>0
+0, & x>0
 \end{cases}
 \end{aligned}
 $$
 
 损失函数图像为
 
-![loss](https://notesoflouis.oss-cn-chengdu.aliyuncs.com/imgs/loss.png)
+![loss.png](./static/loss.png)
 
-观察图像，可知，模型会更多地奖励 loss 为负（即 `output`小于当前`best`）的情况，较少的惩罚（`output`相较`best`大得不多）的情况
+
+观察图像，可知，模型会更多地奖励 loss 为负（即 `cost` 小于当前 `best`）的情况，不惩罚 `cost` 大于当前 `best` 的情况
 ## 5. 更新最优 output
 $$
-best = min(best, output)
+best’ = min(best’, output)
 $$
 (注：best 的初始值为正无穷)
 ## 6. 更新 $P_1$
@@ -181,7 +187,7 @@ x &= current\_epoch/epoch\_num\\
 \\
 lr &= (-x^2+x+1) \cdot lr_0\\
 \\
-p_i &= p_i - lr\cdot loss\\
+p_i &= \rho \cdot p_i - lr\cdot loss\\
 \end{aligned}
 $$
 $$

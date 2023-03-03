@@ -18,7 +18,8 @@ lr = 1  # Learning rate
 habit_factor = 0.25  # between [0, 1], indicates the degree to which people's choices are influenced by habits
 distance_factor = 0.45  # between [0, 1], indicates the degree to which people's choices are influenced by distance to destinations
 immdediate_factor = 0.3  # between [0, 1], indicates the degree to which people's choices are influenced by immediate situation
-epoch_num = 100  # epoch number
+volatile_factor = 0.7  # 挥发系数
+epoch_num = 50  # epoch number
 
 
 Point = namedtuple('Point', ['row', 'col'])
@@ -32,6 +33,8 @@ class Person:
         self._original_room = room
         self._route: list['Exit'] = []
         self._p: dict[int, dict[int, dict[int, Tensor]]] = {}
+        self.cost = 0
+        self.id = -1
 
     def __str__(self) -> str:
         # todo
@@ -40,10 +43,6 @@ class Person:
     @property
     def route(self):
         return self._route
-
-    @property
-    def cost(self):
-        return len(self.route)
 
     @property
     def room(self):
@@ -100,11 +99,12 @@ class Person:
             loss (_type_): the loss * lr value
         """
         position = exit.outset.position
-        old_value = self._p[position.floor_num][position.row][position.col][exit_index]
+        ps = self.get_p(position) * volatile_factor
+        old_value = ps[exit_index]
         # print(f'Old: {self._p[position.floor_num][position.row][position.col]}')
         new_value = max(old_value - loss, 0.001)
-        self._p[position.floor_num][position.row][position.col][exit_index] = new_value
-        self.set_p(position, self._p[position.floor_num][position.row][position.col])
+        ps[exit_index] = new_value
+        self.set_p(position, ps)
         # print(f'New: {self._p[position.floor_num][position.row][position.col]}')
 
     @property
@@ -132,7 +132,7 @@ class Person:
         p_distance = normalize(
             tensor(
                 [
-                    1 / exit.target.distance if exit.target.distance else 1000.0
+                    1 / exit.target.distance**2 if exit.target.distance else 1e6
                     for exit in self.exits
                 ],
                 device=device,
@@ -158,9 +158,9 @@ class Person:
             dim=0,
         )
         # todo annotate this when publish
-        # if self.position == Position(1, 1, 1):
+        # if self.position == Position(2, 1, 1):
         #     print(p)
-        # print([exit.target.position for exit in self.exits])
+        #     print([exit.target.position for exit in self.exits])
         return p_result
 
     @property
@@ -182,11 +182,11 @@ class Person:
         Returns:
             bool: True for move to next room, False for keep the old room
         """
+        if self.room in self.building.destinations:
+            return False
+        self.cost += 1
         return (
-            True
-            if self.room not in self.building.destinations
-            and random() < self.room.reduce_rate / self.room.population
-            else False
+            True if random() < self.room.reduce_rate / self.room.population else False
         )
 
     def where_move(self) -> 'Exit':
@@ -197,24 +197,37 @@ class Person:
         """
         # choose the biggest posibility
         greatest = 0
-        greatest_index = 0
+        greatest_index = None
         ps = self.p
         for i in range(len(ps)):
             if ps[i] > greatest:
+                # ensure not repeated
+                if self.exits[i].target in [exit.outset for exit in self.route]:
+                    continue
                 greatest, greatest_index = ps[i], i
+        if greatest_index is None:
+            # choose randomly
+            r = random()
+            ps = self.p
+            for i in range(len(self.exits)):
+                p = ps[i]
+                if r - p <= 0 and p != 0:
+                    target: Exit= self.exits[i]
+                    return target
+                r -= p
         return self.exits[greatest_index]
         # choose randomly
-        r = random()
-        ps = self.p
-        for i in range(len(self.exits)):
-            p = ps[i]
-            if r - p <= 0 and p != 0:
-                target = self.exits[i]
-                logging.debug(
-                    f'Person move from {self.position} to {target.target.position}'
-                )
-                return target
-            r -= p
+        # r = random()
+        # ps = self.p
+        # for i in range(len(self.exits)):
+        #     p = ps[i]
+        #     if r - p <= 0 and p != 0:
+        #         target = self.exits[i]
+        #         logging.debug(
+        #             f'Person move from {self.position} to {target.target.position}'
+        #         )
+        #         return target
+        #     r -= p
 
     def move(self, exit: "Exit") -> None:
         """Move the person to a certain room
@@ -236,6 +249,7 @@ class Person:
         """Reset this person to the original room and clean the cost and route but keep p"""
         self.room = self._original_room
         self._route = []
+        self.cost = 0
 
 
 class Exit:
@@ -430,7 +444,7 @@ class Room:
         cost_so_far = {self.position: 0}
         while not myqueue.empty():
             current: Room = self.building.get_room(myqueue.get()[1])
-            if current in self.building.destinations:
+            if current._exits_positions in self.building.destinations:
                 break
             for next_room in [exit.target for exit in current.exits]:
                 new_cost = cost_so_far[current.position] + 1
@@ -555,8 +569,9 @@ class Floor:
 
 
 class Building:
-    def __init__(self, floor_layouts: dict) -> None:
+    def __init__(self, floor_layouts: dict, destination: list[Position]) -> None:
         self._floors = self._floors_gen(floor_layouts=floor_layouts)
+        self._destinations = destination
 
     def __str__(self) -> str:
         return '\n'.join([f"{floor}" for floor in self.floors]) + '\n'
@@ -594,8 +609,7 @@ class Building:
         Returns:
             Room object
         """
-        # todo
-        positions = [Position(0, 2, 1)]
+        positions = [Position(z, x, y) for (z, x, y) in self._destinations]
         return [self.get_room(position) for position in positions]
 
     def _floors_gen(
@@ -711,15 +725,12 @@ class Optimizer:
         x = self.epoch / epoch_num
         return (-(x**2) + x + 1) * self._lr
 
-    def step(self, loss: float):
-        loss *= self.lr if loss > 0 else self.lr * 10
-        for person in self._building.persons:
-            if person.cost > 5:
-                person.show_route()
-            for exit in person.route:
-                i = exit.outset.exits.index(exit)
-                person.modify_p(exit=exit, exit_index=i, loss=loss)
-        self.epoch += 1
+    def step(self, person: Person, loss: float):
+        loss *= self.lr
+        person.show_route()
+        for exit in person.route:
+            i = exit.outset.exits.index(exit)
+            person.modify_p(exit=exit, exit_index=i, loss=loss)
 
     def zero_grad(self):
         ...
@@ -746,25 +757,38 @@ class Criterion:
         if x <= 0:
             self.loss = math.exp(x) - 1
         else:
-            self.loss = 1 / (1 + math.exp(10 - x))
+            # self.loss = 1 / (1 + math.exp(10 - x))
+            self.loss = 0
         return self.loss
 
 
 def train(epoch_num):
-    building = Building(floor_layouts=floor_layouts)
+    building = Building(floor_layouts=floor_layouts, destination=destinations)
+    for i, person in enumerate(building.persons):
+        person.id = i
     simulator = Simulator(building=building)
     criterion = Criterion()
     optim = Optimizer(building=building, learning_rate=lr)
     best = float("inf")
+    personal_best = {}
     results = []
     train_info = []
     for epoch in range(epoch_num):
+        losses = []
         output = simulator.forward()
-        loss = criterion(output=output, target=best)
         best = min(best, output)
-        optim.zero_grad()
-        optim.step(loss)
+        for person in building.persons:
+            loss = criterion(
+                output=person.cost, target=personal_best.get(person.id, float('inf'))
+            )
+            personal_best[person.id] = min(
+                personal_best.get(person.id, float('inf')), person.cost
+            )
+            optim.step(person, loss)
+            optim.epoch += 1
+            losses.append(loss)
         results.append(output)
+        loss = sum(losses)
         train_info.append((epoch, loss))
         logging.info(
             f"Finish epoch: {epoch}\twithin {output} frames; current best is {best}; loss is {loss}"
@@ -774,12 +798,12 @@ def train(epoch_num):
         )
     average = sum(results) / len(results)
     variance = sum([(result - average) ** 2 for result in results]) / len(results)
-    logging.info(f"The average reslut is {average} frames")
-    print(f"The average reslut is {average} frames")
-    logging.info(f"The variance reslut is {variance}")
-    print(f"The variance reslut is {variance}")
-    logging.info(f"The fastest reslut is {best} frames")
-    print(f"The fastest reslut is {best} frames")
+    logging.info(f"The average result is {average} frames")
+    print(f"The average result is {average} frames")
+    logging.info(f"The variance result is {variance}")
+    print(f"The variance result is {variance}")
+    logging.info(f"The fastest result is {best} frames")
+    print(f"The fastest result is {best} frames")
     return train_info
 
 
@@ -799,6 +823,8 @@ if __name__ == "__main__":
     with open("./floor_layouts.json", "r", encoding="utf-8") as f:
         floor_layouts = json.load(f)
     logging.debug(f"The floor layouts:\n{floor_layouts}\n")
+    with open("./destinations.json", "r", encoding="utf-8") as f:
+        destinations = json.load(f)["destinations"]
     train_info = train(epoch_num)
     draw_loss(train_info=train_info)
     print("Finish!")
