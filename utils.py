@@ -68,7 +68,7 @@ class Person:
         """The exits the room containing the person has
 
         Returns:
-            list[Room]
+            list[Exit]
         """
         return self.room.exits
 
@@ -185,8 +185,20 @@ class Person:
         if self.room in self.building.destinations:
             return False
         self.cost += 1
+        exits = self.exits[::]
+        for exit in exits:
+            if exit.target in self.building.destinations:
+                continue
+            # 除了建筑出口，每平米最多3个人
+            if exit.target.population / exit.target.area >= 3:
+                exits.remove(exit)
+        if not exits:
+            return False
         return (
-            True if random() < self.room.reduce_rate / self.room.population else False
+            True
+            if random()
+            < sum([exit.reduce_rate for exit in exits]) / self.room.population
+            else False
         )
 
     def where_move(self) -> 'Exit':
@@ -200,9 +212,10 @@ class Person:
         greatest_index = None
         ps = self.p
         for i in range(len(ps)):
-            if ps[i] > greatest:
-                # ensure not repeated
-                if self.exits[i].target in [exit.outset for exit in self.route]:
+            target_ = self.exits[i].target
+            if ps[i] > greatest and target_.population / target_.area < 3:
+                # ensure not repeat the room passed
+                if target_ in [exit.outset for exit in self.route]:
                     continue
                 greatest, greatest_index = ps[i], i
         if greatest_index is None:
@@ -212,7 +225,7 @@ class Person:
             for i in range(len(self.exits)):
                 p = ps[i]
                 if r - p <= 0 and p != 0:
-                    target: Exit= self.exits[i]
+                    target: Exit = self.exits[i]
                     return target
                 r -= p
         return self.exits[greatest_index]

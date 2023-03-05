@@ -3,7 +3,7 @@ aliases: []
 tags:
   - 
 time built: 2023-02-22 16:10  
-last change: 2023-03-02 14:15  
+last change: 2023-03-05 15:53  
 ---
 # 架构
 ![架构.png](./static/%E6%9E%B6%E6%9E%84.png)
@@ -51,12 +51,8 @@ $$
 
 # Person
 `Person`：人员对象
-## room
-`room`：当前所在房间
-## exits
-`exits`：所在房间的 `exits` 属性，即该人员可以选择的所有对象 `Exit` 对象
-## position
-`position`：该人员的位置 `Position(floor_num, row, col)`
+## cost
+`cost`：该人员到达出口消耗的帧数
 ## route
 `route` 该人员走过的路线
 ## P
@@ -134,13 +130,19 @@ $\rho$：挥发系数
 ## 1. 判断此人能否转移
 $$
 \begin{aligned}
-\text {if}\quad& 未到达终点 \quad \text{应当转移 else 不应当转移}\\
+&\text {if}\quad 未到达终点 \quad \text{应当转移 else 不应当转移}\\
 \\
-r &= random()\\
+&self.cost += 1\\
 \\
-\text {if}\quad r &<\dfrac{room.reduce\_rate}{room.population}\quad \text{应当转移 else 不应当转移}
+&if\quad \exists\quad target.density < 3\quad 转移\quad else\quad不转移\\
+\\
+&r = random()\\
+\\
+&\text {if}\quad r <\dfrac{room.reduce\_rate}{room.population}\quad \text{应当转移 else 不应当转移}
 \end{aligned}
 $$
+考虑此人是否已经到达建筑出口，并且存在目的地人口密度小于 3 时，才根据概率判断此人能否转移
+更具体的判断方法见程序
 仅当此 `Person` 应当转移时，才执行后续步骤，否则直接处理下一个 `Person`
 ## 2. 确定 Exit
 按上述方法计算该 `Person` 在当前 `Room` 的 `P`
@@ -152,17 +154,18 @@ $$
 每将所有人遍历一遍，称为一帧
 直到所有 `Person` 都到达了设定的建筑出口 `Room`
 ## 4. 计算损失
+随着迭代次数的增加，人们偏向使自己花费的时间最少
 遍历每个 `Person`
-`person.cost` 表示某人到建筑出口消耗的帧数
-`best` 表示该人在历次迭代中的最少消耗帧数
+`person_i.cost` 表示某人到建筑出口消耗的帧数
+`person_i.best` 表示该人在历次迭代中的最少消耗帧数
 `output` 表示本次模拟所有人到达建筑出口消耗的帧数
 $$
 \begin{aligned}
-x &= person.cost - best\\
+x_i &= person_i.cost - person_i.best\\
 \\
-loss &=
+loss_i &=
 \begin{cases}
-e^{\frac x 2}-1, & x\le0\\
+e^{\frac {x_i} 2}-1, & x\le0\\
 0, & x>0
 \end{cases}
 \end{aligned}
@@ -173,10 +176,11 @@ $$
 ![loss.png](./static/loss.png)
 
 
-观察图像，可知，模型会更多地奖励 loss 为负（即 `cost` 小于当前 `best`）的情况，不惩罚 `cost` 大于当前 `best` 的情况
+观察图像，可知，模型会更多地奖励 loss 为负（即 `person_i.cost` 小于当前 `person_i.best`）的情况，不惩罚 `cost` 大于当前 `best` 的情况（因为每个 `Person` 消耗的帧数是随机的）
+所有人的 `loss` 相加得到本次迭代的`loss`
 ## 5. 更新最优 output
 $$
-best’ = min(best’, output)
+best' = min(best', output)
 $$
 (注：best 的初始值为正无穷)
 ## 6. 更新 $P_1$
@@ -197,5 +201,43 @@ $$
 ## 7. 迭代
 重置到初始状态
 重复 1～6，直到达到设定的迭代次数
-得到的 `best` 即为能够反映该建筑疏散能力的指标
+得到的 `best'` 与平均帧数与方差即为能够反映该建筑疏散能力的指标
+
+# EXAMPLE
+一栋 $3\times 3\times 3$ 的建筑，只有一个出口
+每个房间面积为 20，每层有 5 个房间分布人员，每个房间分布 20 人
+超参数为
+$$
+\begin{aligned}
+&learning\_rate = 1\\
+\\
+&habit\_factor = 0.25\\
+\\
+&distance\_factor = 0.45\\
+\\
+&immdediate\_factor = 0.3\\
+\\
+&volatile\_factor = 0.7\\
+\\
+&epoch\_num = 50\\
+\end{aligned}
+$$
+## loss result
+![result.png](./static/result.png)
+
+解释：随着迭代的进行，所有人员都无法发现使自己通行时间继续缩短的路线，模型收敛
+## Result
+The average result is 99.88 frames
+The variance result is 132.86559999999994
+The fastest result is 66 frames
+$$
+\begin{aligned}
+&\bar {result}= \dfrac {\sum_{i=1}^{epoch\_num}{result_i}}{epoch\_num} = 99.88\\
+\\
+&\sigma^2 = \dfrac{\sum_{i=1}^{epoch\_num}{(result_i-\bar {result})^2}}{epoch\_num}=132.87\\
+\\
+&result_{min} = 66
+\end{aligned} 
+$$
+
 
