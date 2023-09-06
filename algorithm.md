@@ -227,16 +227,16 @@ $$
 
 解释：随着迭代的进行，所有人员都无法发现使自己通行时间继续缩短的路线，模型收敛
 ## Result
-The average result is 99.88 frames
-The variance result is 132.86559999999994
-The fastest result is 66 frames
+The average result is 107.06 frames
+The variance result is 251.89640000000006
+The fastest result is 73 frames
 $$
 \begin{aligned}
-&\bar {result}= \dfrac {\sum_{i=1}^{epoch\_num}{result_i}}{epoch\_num} = 99.88\\
+&\bar {result}= \dfrac {\sum_{i=1}^{epoch\_num}{result_i}}{epoch\_num} = 107.96\\
 \\
-&\sigma^2 = \dfrac{\sum_{i=1}^{epoch\_num}{(result_i-\bar {result})^2}}{epoch\_num}=132.87\\
+&\sigma^2 = \dfrac{\sum_{i=1}^{epoch\_num}{(result_i-\bar {result})^2}}{epoch\_num}=251.90\\
 \\
-&result_{min} = 66
+&result_{min} = 73
 \end{aligned} 
 $$
 

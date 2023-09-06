@@ -221,7 +221,6 @@ class Person:
         if greatest_index is None:
             # choose randomly
             r = random()
-            ps = self.p
             for i in range(len(self.exits)):
                 p = ps[i]
                 if r - p <= 0 and p != 0:
